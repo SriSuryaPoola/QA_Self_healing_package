@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aegisai"
+version = "0.3.4"
+description = "Deterministic-first self-healing test automation SDK for Selenium and Playwright."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "AegisAI" }
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Testing"
+]
+dependencies = []
+
+[project.optional-dependencies]
+selenium = ["selenium>=4"]
+playwright = ["playwright>=1.40"]
+persistence = ["libcst>=1.0"]
+dev = []
+
+[project.scripts]
+aegisai = "aegisai.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aegisai*"]

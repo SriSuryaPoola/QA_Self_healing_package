@@ -1,0 +1,518 @@
+from __future__ import annotations
+
+import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from uuid import uuid4
+
+from aegisai import AegisAI, is_state_poisoned, on_state_poisoned, set_state_poisoned
+from aegisai.engine.confidence import ConfidenceScorer, route_for_score
+from aegisai.memory import load_events, merge_events, write_event
+from aegisai.models import MemoryEvent
+from aegisai.persistence.ast_rewrite import rewrite_static_locator
+from aegisai.persistence.git_pr import should_open_pr
+from aegisai.security import RiskLevel, SecurityOfficer, redact_payload
+from aegisai.utils.dom_parser import parse_dom_subset
+
+
+class ConfidenceTests(unittest.TestCase):
+    def test_threshold_routes(self) -> None:
+        self.assertEqual(route_for_score(0.91), "auto_pr")
+        self.assertEqual(route_for_score(0.85), "confirm_across_runs")
+        self.assertEqual(route_for_score(0.79), "block")
+
+    def test_score_is_clamped(self) -> None:
+        score = ConfidenceScorer().score(
+            attribute_match=2,
+            dom_proximity=1,
+            historical_success=1,
+        )
+        self.assertEqual(score.score, 1.0)
+
+
+class DomAndHealingTests(unittest.TestCase):
+    def test_dom_parser_filters_sensitive_values(self) -> None:
+        html = """
+        <form>
+          <input name="password" value="secret">
+          <input name="csrf_token" value="csrf-123">
+          <button data-testid="login-button" aria-label="Log in">Log in</button>
+        </form>
+        """
+        elements = parse_dom_subset(html)
+        serialized = repr(elements)
+        self.assertIn("login-button", serialized)
+        self.assertNotIn("secret", serialized)
+        self.assertNotIn("csrf-123", serialized)
+
+    def test_deterministic_heal_prefers_data_testid(self) -> None:
+        html = '<button data-testid="login-button" aria-label="Log in">Log in</button>'
+        result = AegisAI().heal_locator("#login", html, expected_role="button")
+        self.assertEqual(result.locator, '[data-testid="login-button"]')
+        self.assertFalse(result.llm_used)
+        self.assertTrue(result.guardrail.allowed)
+
+    def test_guardrail_blocks_role_mismatch(self) -> None:
+        html = '<div data-testid="login-button">Log in</div>'
+        result = AegisAI().heal_locator("#login", html, expected_role="button")
+        self.assertIsNone(result.locator)
+        self.assertEqual(result.guardrail.code, "role_mismatch")
+
+    def test_guardrail_blocks_ambiguous_matches(self) -> None:
+        html = """
+        <button data-testid="login-primary">Log in</button>
+        <button data-testid="login-secondary">Log in</button>
+        """
+        result = AegisAI().heal_locator("#login", html, expected_role="button")
+        self.assertIsNone(result.locator)
+        self.assertEqual(result.guardrail.code, "ambiguous")
+
+
+class MemoryTests(unittest.TestCase):
+    def test_memory_write_load_and_merge(self) -> None:
+        event = MemoryEvent(
+            key="login",
+            old="#login",
+            new='[data-testid="login-button"]',
+            confidence=0.93,
+            source="deterministic",
+            node_id="node-a",
+        )
+        unique = uuid4().hex
+        event = MemoryEvent(
+            key=f"login-{unique}",
+            old="#login",
+            new='[data-testid="login-button"]',
+            confidence=0.93,
+            source="deterministic",
+            node_id=f"node-{unique}",
+        )
+        output_dir = Path(".aegisai-test-memory")
+        first = write_event(event, output_dir)
+        second = write_event(event, output_dir)
+        self.assertNotEqual(first, second)
+        loaded = [item for item in load_events(output_dir) if item.get("key") == event.key]
+        self.assertEqual(len(loaded), 2)
+        merged = merge_events(loaded)
+        self.assertEqual(len(merged), 1)
+
+
+class PersistenceTests(unittest.TestCase):
+    def test_static_locator_rewrite(self) -> None:
+        source = 'driver.find_element(By.ID, "login")\n'
+        result = rewrite_static_locator(source, "login", "login-button")
+        self.assertTrue(result.changed)
+        self.assertIn('"login-button"', result.source)
+
+    def test_pr_decision_requires_confidence_or_confirmation(self) -> None:
+        self.assertTrue(should_open_pr(0.91).eligible)
+        self.assertFalse(should_open_pr(0.85, confirmations=1).eligible)
+        self.assertTrue(should_open_pr(0.85, confirmations=2).eligible)
+        self.assertFalse(should_open_pr(0.79, confirmations=3).eligible)
+
+
+class StateTests(unittest.TestCase):
+    def test_state_poisoned_hook(self) -> None:
+        set_state_poisoned(False)
+        self.assertFalse(is_state_poisoned())
+        result = on_state_poisoned(reset_driver=False)
+        self.assertTrue(result["state_poisoned"])
+        self.assertTrue(is_state_poisoned())
+
+
+class RegressionTests(unittest.TestCase):
+    """Regression tests for bugs fixed in v0.2.0."""
+
+    def test_xpath_type_attribute_locator_heals(self) -> None:
+        """Fix 1+2: //input[@type='email'] must score >= 0.8 and be allowed."""
+        html = '<input type="email">'
+        result = AegisAI().heal_locator("//input[@type='email']", html)
+        self.assertIsNotNone(result.locator, "Expected a healed locator, got None")
+        self.assertTrue(result.guardrail.allowed,
+                        f"Guardrail blocked with: {result.guardrail.reason}")
+        self.assertGreaterEqual(result.confidence, 0.8)
+
+    def test_xpath_type_password_locator_heals_with_security_governance(self) -> None:
+        """Password fields can heal at runtime, but governance controls persistence."""
+        html = '<input type="password">'
+        result = AegisAI().heal_locator("//input[@type='password']", html)
+        self.assertEqual(result.locator, 'input[type="password"]')
+        self.assertTrue(result.guardrail.allowed)
+
+        element = parse_dom_subset(html)[0]
+        decision = SecurityOfficer().review_candidate(
+            old_locator="//input[@type='password']",
+            new_locator=result.locator,
+            element=element,
+            source="test",
+            confidence=result.confidence,
+        )
+        self.assertEqual(decision.risk_level, RiskLevel.MEDIUM)
+        self.assertTrue(decision.runtime_allowed)
+        self.assertFalse(decision.persistence_allowed)
+        self.assertTrue(decision.review_required)
+
+    def test_bare_input_has_stable_locator(self) -> None:
+        """Fix 3: <input type='email'> with no id/name must NOT return None stable_locator."""
+        from aegisai.utils.dom_parser import parse_dom_subset
+        elements = parse_dom_subset('<input type="email">')
+        self.assertTrue(len(elements) > 0, "DOM parser returned no elements")
+        locator = elements[0].stable_locator()
+        self.assertIsNotNone(locator, "stable_locator() returned None for bare input[type=email]")
+        self.assertIn("email", locator)
+
+    def test_llm_fallback_invoked_when_adapter_provided(self) -> None:
+        """Fix 4: LLM fallback is called when deterministic heal is blocked."""
+        import json
+
+        class _StubAdapter:
+            def complete_json(self, payload, *, timeout_seconds, temperature) -> str:
+                return json.dumps({"locator": '[name="email"]', "confidence": 0.92})
+
+        # Use a locator that can't match anything in an empty DOM
+        result = AegisAI(llm_adapter=_StubAdapter()).heal_locator(
+            "//div[@data-unknown='xyz']", "<div></div>"
+        )
+        self.assertTrue(result.llm_used, "Expected LLM fallback to be used")
+
+    def test_noise_tokens_stripped_from_xpath(self) -> None:
+        """Fix 2: XPath noise words like 'normalize', 'space' don't dilute token score."""
+        from aegisai.engine.deterministic import DeterministicEngine
+        tokens = DeterministicEngine._locator_tokens(
+            "//button[normalize-space()='Login here']"
+        )
+        self.assertNotIn("normalize", tokens)
+        self.assertNotIn("space", tokens)
+        self.assertIn("login", tokens)
+        self.assertIn("here", tokens)
+
+    def test_locator_tokens_split_broken_id_semantics(self) -> None:
+        from aegisai.engine.deterministic import DeterministicEngine
+
+        tokens = DeterministicEngine._locator_tokens("//input[@id='pass-field']")
+        self.assertEqual(tokens, {"input", "password"})
+
+    def test_llm_fallback_locator_must_match_filtered_dom(self) -> None:
+        import json
+
+        class _StubAdapter:
+            def complete_json(self, payload, *, timeout_seconds, temperature) -> str:
+                return json.dumps({"locator": '[name="email"]', "confidence": 0.92})
+
+        result = AegisAI(llm_adapter=_StubAdapter()).heal_locator(
+            "//div[@data-unknown='xyz']",
+            '<input name="email" type="email">',
+        )
+        self.assertTrue(result.llm_used)
+        self.assertEqual(result.locator, '[name="email"]')
+        self.assertTrue(result.guardrail.allowed)
+
+    def test_llm_fallback_reports_safe_error(self) -> None:
+        class _BrokenAdapter:
+            def complete_json(self, payload, *, timeout_seconds, temperature) -> str:
+                raise RuntimeError("adapter unavailable")
+
+        result = AegisAI(llm_adapter=_BrokenAdapter()).heal_locator(
+            "//div[@data-unknown='xyz']",
+            '<input name="email" type="email">',
+        )
+        self.assertTrue(result.llm_used)
+        self.assertIsNone(result.locator)
+        self.assertEqual(result.guardrail.code, "llm_error")
+
+    def test_password_candidates_allowed_at_runtime_without_auto_persistence(self) -> None:
+        from aegisai.engine.healing_orchestrator import HealingOrchestrator
+
+        class _Element:
+            tag_name = "input"
+            text = ""
+
+            def get_attribute(self, name):
+                return {"tagName": "input", "type": "password", "name": "password"}.get(name)
+
+        decision, persistence_allowed = HealingOrchestrator()._review_live_candidate(
+            element=_Element(),
+            locator='input[type="password"]',
+            confidence=0.95,
+            raw_locator="//input[@type='password']",
+        )
+        self.assertTrue(decision.allowed)
+        self.assertFalse(persistence_allowed)
+
+    def test_critical_token_candidates_blocked_across_layers(self) -> None:
+        from aegisai.engine.healing_orchestrator import HealingOrchestrator
+
+        class _Element:
+            tag_name = "input"
+            text = ""
+
+            def get_attribute(self, name):
+                return {"tagName": "input", "type": "hidden", "name": "csrf_token"}.get(name)
+
+        decision = HealingOrchestrator()._validate_live_candidate(
+            element=_Element(),
+            locator='input[name="csrf_token"]',
+            confidence=0.95,
+            raw_locator="//input[@name='csrf_token']",
+        )
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.code, "security_blocked")
+
+    def test_password_candidates_generated_by_fast_layers(self) -> None:
+        from aegisai.engine.js_prober import _build_strategies
+        from aegisai.engine.locator_translator import translate
+
+        translations = translate("//input[@type='password']")
+        strategies = _build_strategies("//input[@type='password']")
+        self.assertTrue(any(item.locator == "input[type='password']" for item in translations))
+        self.assertTrue(any(item["selector"] == "input[type='password']" for item in strategies))
+
+    def test_js_probe_supports_mail_synonym_without_l1_translation(self) -> None:
+        from aegisai.engine.js_prober import _PROBE_SCRIPT, _build_strategies
+        from aegisai.engine.locator_translator import translate
+
+        locator = "//input[@data-field='mailbox-field']"
+        self.assertTrue(_PROBE_SCRIPT.lstrip().startswith("return"))
+        self.assertFalse(any(item.source.startswith("email") for item in translate(locator)))
+        self.assertTrue(any(item["selector"] == "input[type='email']" for item in _build_strategies(locator)))
+
+    def test_security_redactor_masks_secret_payload_values(self) -> None:
+        redacted = redact_payload(
+            {
+                "password": "MySecret123",
+                "attrs": {"value": "ActualPassword123", "placeholder": "Password"},
+                "token": "csrf-123",
+            }
+        )
+        self.assertEqual(redacted["password"], "***MASKED***")
+        self.assertEqual(redacted["attrs"]["value"], "***MASKED***")
+        self.assertEqual(redacted["token"], "***MASKED***")
+        self.assertEqual(redacted["attrs"]["placeholder"], "Password")
+
+    def test_orchestrator_skips_l5_when_llm_disabled(self) -> None:
+        from aegisai.engine.healing_orchestrator import HealingOrchestrator
+        from aegisai.utils.llm_config import CONFIG_DIR_ENV
+        from unittest.mock import patch
+
+        class _Driver:
+            page_source = "<html></html>"
+
+            def find_element(self, by, locator):
+                raise RuntimeError("not found")
+
+            def execute_script(self, script):
+                return None
+
+        with TemporaryDirectory() as tmp:
+            with patch.dict("os.environ", {CONFIG_DIR_ENV: tmp}, clear=True):
+                outcome = HealingOrchestrator(enable_llm=False).orchestrate(
+                    RuntimeError("missing"),
+                    driver=_Driver(),
+                    wait=None,
+                    failing_locator="//input[@type='email']",
+                )
+        self.assertFalse(outcome.success)
+        self.assertIn("L5 LLM fallback was not started", outcome.reason)
+        self.assertIn("no LLM provider/API key is configured", outcome.reason)
+        self.assertNotIn("L5:llm", outcome.layers_tried)
+
+    def test_orchestrator_reports_missing_llm_key_when_l5_enabled(self) -> None:
+        from aegisai.engine.healing_orchestrator import HealingOrchestrator
+        from aegisai.utils.llm_config import CONFIG_DIR_ENV
+        from unittest.mock import patch
+
+        class _Driver:
+            page_source = "<html></html>"
+
+            def find_element(self, by, locator):
+                raise RuntimeError("not found")
+
+            def execute_script(self, script):
+                return None
+
+        with TemporaryDirectory() as tmp:
+            with patch.dict("os.environ", {CONFIG_DIR_ENV: tmp}, clear=True):
+                outcome = HealingOrchestrator(enable_llm=True).orchestrate(
+                    RuntimeError("missing"),
+                    driver=_Driver(),
+                    wait=None,
+                    failing_locator="//input[@type='email']",
+                )
+        self.assertFalse(outcome.success)
+        self.assertIn("L5:llm", outcome.layers_tried)
+        self.assertIn("L5 LLM fallback is unavailable", outcome.reason)
+        self.assertIn("no LLM provider/API key is configured", outcome.reason)
+
+    def test_placeholder_llm_key_is_treated_as_missing(self) -> None:
+        from aegisai.engine.universal_llm_adapter import UniversalLLMAdapter
+        from aegisai.utils.llm_config import CONFIG_DIR_ENV
+        from unittest.mock import patch
+
+        with TemporaryDirectory() as tmp:
+            with patch.dict(
+                "os.environ",
+                {
+                    CONFIG_DIR_ENV: tmp,
+                    "AEGIS_LLM_PROVIDER": "openai",
+                    "AEGIS_LLM_API_KEY": "your-api-key",
+                    "AEGIS_LLM_MODEL": "gpt-4o",
+                },
+                clear=True,
+            ):
+                self.assertFalse(UniversalLLMAdapter.is_configured())
+                self.assertIn(
+                    "AEGIS_LLM_API_KEY is not configured",
+                    UniversalLLMAdapter.configuration_issue(),
+                )
+
+    def test_configure_llm_writes_user_env_without_printing_key(self) -> None:
+        from aegisai.main import main
+
+        with TemporaryDirectory() as tmp:
+            config_file = Path(tmp) / ".env"
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "configure",
+                        "llm",
+                        "--enable",
+                        "--provider",
+                        "openai",
+                        "--api-key",
+                        "sk-test-secret",
+                        "--model",
+                        "gpt-4o-mini",
+                        "--config-file",
+                        str(config_file),
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            self.assertTrue(config_file.exists())
+            self.assertIn('AEGIS_LLM_ENABLED="true"', config_file.read_text(encoding="utf-8"))
+            self.assertIn('AEGIS_LLM_API_KEY="sk-test-secret"', config_file.read_text(encoding="utf-8"))
+            self.assertIn("API key: configured", output.getvalue())
+            self.assertNotIn("sk-test-secret", output.getvalue())
+
+    def test_universal_adapter_reads_saved_user_config(self) -> None:
+        from aegisai.engine.universal_llm_adapter import UniversalLLMAdapter
+        from aegisai.utils.llm_config import CONFIG_DIR_ENV, LLMSettings, write_llm_settings
+        from unittest.mock import patch
+
+        with TemporaryDirectory() as tmp:
+            write_llm_settings(
+                LLMSettings(
+                    enabled=True,
+                    provider="openai",
+                    api_key="sk-test-secret",
+                    model="gpt-4o-mini",
+                ),
+                Path(tmp) / ".env",
+            )
+            with patch.dict("os.environ", {CONFIG_DIR_ENV: tmp}, clear=True):
+                self.assertTrue(UniversalLLMAdapter.is_configured())
+                adapter = UniversalLLMAdapter()
+                self.assertEqual(adapter.provider, "openai")
+                self.assertEqual(adapter.api_key, "sk-test-secret")
+                self.assertEqual(adapter.model, "gpt-4o-mini")
+
+    def test_listener_uses_saved_llm_enabled_preference(self) -> None:
+        from aegisai.interceptor.selenium_listener import AegisSeleniumListener
+        from aegisai.utils.llm_config import CONFIG_DIR_ENV, LLMSettings, write_llm_settings
+        from unittest.mock import patch
+
+        with TemporaryDirectory() as tmp:
+            write_llm_settings(
+                LLMSettings(enabled=True, provider="ollama", model="llama3.1"),
+                Path(tmp) / ".env",
+            )
+            with patch.dict("os.environ", {CONFIG_DIR_ENV: tmp}, clear=True):
+                listener = AegisSeleniumListener()
+                self.assertTrue(listener._enable_llm)
+
+    def test_heal_find_returns_direct_element_without_healing(self) -> None:
+        from aegisai.selenium import heal_find
+
+        class _Driver:
+            def find_element(self, by, value):
+                return {"by": by, "value": value}
+
+        result = heal_find(_Driver(), None, "xpath", "//input[@type='email']")
+        self.assertEqual(result, {"by": "xpath", "value": "//input[@type='email']"})
+
+    def test_heal_find_uses_listener_on_failure(self) -> None:
+        from aegisai.selenium import heal_find
+
+        class _Driver:
+            def find_element(self, by, value):
+                raise RuntimeError("missing")
+
+        class _Listener:
+            def __init__(self):
+                self.recorded = None
+
+            def before_find(self, by, value, driver=None):
+                self.recorded = (by, value, driver)
+
+            def autonomous_heal(self, exc, *, driver, wait=None, original_condition=None):
+                return "healed-element"
+
+        driver = _Driver()
+        listener = _Listener()
+        result = heal_find(driver, None, "xpath", "//missing", listener=listener)
+        self.assertEqual(result, "healed-element")
+        self.assertEqual(listener.recorded, ("XPATH", "//missing", driver))
+
+    def test_activate_aegis_auto_heals_find_element_and_restores(self) -> None:
+        from aegisai.selenium import activate_aegis, deactivate_aegis
+
+        class _Driver:
+            def __init__(self):
+                self.original_calls = 0
+
+            def find_element(self, by, value):
+                self.original_calls += 1
+                raise RuntimeError("missing")
+
+        driver = _Driver()
+        patch = activate_aegis(driver)
+        patch.listener.autonomous_heal = lambda exc, *, driver, wait=None, original_condition=None: "healed"
+
+        self.assertEqual(driver.find_element("xpath", "//missing"), "healed")
+        self.assertEqual(driver.original_calls, 1)
+        self.assertIs(activate_aegis(driver), patch)
+
+        deactivate_aegis(driver)
+        with self.assertRaises(RuntimeError):
+            driver.find_element("xpath", "//missing")
+        self.assertFalse(patch.active)
+
+    def test_activate_aegis_does_not_recurse_during_healing(self) -> None:
+        from aegisai.selenium import activate_aegis
+
+        class _Driver:
+            def __init__(self):
+                self.original_calls = 0
+
+            def find_element(self, by, value):
+                self.original_calls += 1
+                raise RuntimeError("missing")
+
+        driver = _Driver()
+        patch = activate_aegis(driver)
+
+        def _heal(exc, *, driver, wait=None, original_condition=None):
+            with self.assertRaises(RuntimeError):
+                driver.find_element("xpath", "//still-missing")
+            return "healed"
+
+        patch.listener.autonomous_heal = _heal
+        self.assertEqual(driver.find_element("xpath", "//missing"), "healed")
+        self.assertEqual(driver.original_calls, 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

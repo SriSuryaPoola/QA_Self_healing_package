@@ -1,0 +1,63 @@
+# Secrets and local configuration
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# API keys, credentials, certificates, and other sensitive local files
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.token
+*.secret
+credentials*
+secrets/
+secret/
+tokens/
+
+# Private BRS/TDD documents
+AegisAI_BRS*
+AegisAI_TDD*
+*BRS*
+*brs*
+*TDD*
+*tdd*
+
+# Local AegisAI runtime output and logs
+.aegisai/
+.aegisai-test-memory/
+logs/
+*.bak
+*.backup
+*.orig
+
+# Python caches, virtual environments, and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# IDE and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
