@@ -348,12 +348,11 @@ class AegisAI:
         expected_role: str | None,
         historical_success: dict[str, float],
     ) -> tuple[object, ...]:
-        history_items = () if not historical_success else tuple(sorted(historical_success.items()))
         return (
             failing_locator,
             dom_key,
             expected_role,
-            history_items,
+            tuple(sorted(historical_success.items())),
             self.config.guardrails.confidence_threshold,
             self.security_officer.policy,
         )
