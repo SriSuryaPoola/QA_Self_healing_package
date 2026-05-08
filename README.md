@@ -42,6 +42,7 @@ Most self-healing approaches either retry blindly or jump straight to AI. AegisA
 | Area | Status |
 |---|---|
 | Selenium L0-L5 healing cascade | Available |
+| Universal framework detection | Available through `from aegisai import activate_aegis` |
 | Selenium runtime healing | Available |
 | Selenium helper functions | Available through `heal_find`, `heal_click`, `heal_send_keys` |
 | Selenium opt-in auto-activation | Available through `activate_aegis(driver, ...)` |
@@ -75,15 +76,16 @@ Test Runner
 
 ## Integration Modes
 
-AegisAI now supports three Selenium adoption styles. This lets a team start safe and then reduce code changes as confidence grows.
+AegisAI supports universal auto-detection plus framework-specific adoption styles. This lets a team start safe and then reduce code changes as confidence grows.
 
 | Mode | User Code Change | Best For | Tradeoff |
 |---|---|---|---|
+| Universal auto-detection | Usually one import plus one activation call | Teams using Selenium, Playwright, or both | Still requires a live `driver` or `page` object |
 | Explicit listener | More code per protected locator | Regulated teams, debugging, first rollout | User must remember `before_find(...)` |
 | Helper functions | One clean call per locator/action | Most teams, page objects, shared utilities | Requires replacing direct calls with helper calls |
 | Auto-activation | Usually two lines per driver | Large legacy suites, fast adoption, fewer user mistakes | Opt-in driver patching must be understood and reversible |
 
-Auto-activation patches only the supplied driver instance. It does not patch Selenium globally, and it can be disabled with `deactivate_aegis(driver)` or `patch.restore()`.
+Auto-activation patches only the supplied Selenium driver or sync Playwright page instance. It does not patch frameworks globally, and it can be disabled with `deactivate_aegis(target)` or `patch.restore()`.
 
 ## Layer Capabilities
 
@@ -310,15 +312,15 @@ AegisAI does not require a framework rewrite. Pick the integration level that fi
 
 ### Option A: Auto-Activation
 
-This is the lowest-change path. Add two lines after creating the driver:
+This is the lowest-change path. Import the universal activator and call it after creating the driver. AegisAI detects Selenium automatically.
 
 ```python
 from selenium import webdriver
 
-from aegisai.selenium import activate_aegis
+from aegisai import activate_aegis
 
 driver = webdriver.Chrome()
-activate_aegis(driver, script_path=__file__, backup=True)
+activate_aegis(driver, backup=True)
 
 # Existing Selenium code can stay mostly unchanged.
 email_input = driver.find_element("xpath", "//input[@id='email-field']")
@@ -327,12 +329,21 @@ email_input.send_keys("qa@example.com")
 
 If `driver.find_element(...)` fails, AegisAI records the failing locator and runs the healing cascade. If healing succeeds, the healed element is returned to the same line of user code.
 
+In simple scripts, AegisAI can also find a local variable named `driver` automatically:
+
+```python
+driver = webdriver.Chrome()
+activate_aegis()
+```
+
+For page objects, fixtures, or files with multiple browser objects, pass the target explicitly.
+
 You can restore raw Selenium behavior:
 
 ```python
-from aegisai.selenium import activate_aegis, deactivate_aegis
+from aegisai import activate_aegis, deactivate_aegis
 
-patch = activate_aegis(driver, script_path=__file__)
+patch = activate_aegis(driver)
 
 # Later:
 patch.restore()
@@ -463,7 +474,7 @@ Auto-activation patches only the supplied sync Playwright `page` instance. It wr
 ```python
 from playwright.sync_api import sync_playwright
 
-from aegisai.playwright import activate_aegis
+from aegisai import activate_aegis
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
@@ -481,10 +492,17 @@ with sync_playwright() as p:
     browser.close()
 ```
 
+AegisAI can also find a local variable named `page` automatically in simple scripts:
+
+```python
+page = browser.new_page()
+activate_aegis()
+```
+
 You can restore raw Playwright behavior:
 
 ```python
-from aegisai.playwright import activate_aegis, deactivate_aegis
+from aegisai import activate_aegis, deactivate_aegis
 
 patch = activate_aegis(page)
 

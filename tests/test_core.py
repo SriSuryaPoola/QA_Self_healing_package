@@ -136,6 +136,94 @@ class InterceptorTests(unittest.TestCase):
         self.assertEqual(interceptor.failures[-1].last_actions[-1]["locator"], "#missing")
 
 
+class AutoDetectionTests(unittest.TestCase):
+    class _SeleniumDriver:
+        page_source = "<html></html>"
+
+        def find_element(self, by="id", value=None):
+            raise RuntimeError("missing")
+
+        def execute_script(self, script):
+            return None
+
+    class _PlaywrightLocator:
+        def count(self):
+            return 0
+
+    class _PlaywrightPage:
+        def locator(self, selector, *args, **kwargs):
+            return AutoDetectionTests._PlaywrightLocator()
+
+        def content(self):
+            return "<html></html>"
+
+    def test_detect_framework_from_selenium_object(self) -> None:
+        from aegisai import FrameworkKind, detect_framework
+
+        driver = self._SeleniumDriver()
+        detection = detect_framework(driver)
+
+        self.assertEqual(detection.kind, FrameworkKind.SELENIUM)
+        self.assertIs(detection.target, driver)
+
+    def test_detect_framework_from_playwright_object(self) -> None:
+        from aegisai import FrameworkKind, detect_framework
+
+        page = self._PlaywrightPage()
+        detection = detect_framework(page)
+
+        self.assertEqual(detection.kind, FrameworkKind.PLAYWRIGHT)
+        self.assertIs(detection.target, page)
+
+    def test_universal_activate_patches_selenium_target(self) -> None:
+        from aegisai import activate_aegis, deactivate_aegis
+
+        driver = self._SeleniumDriver()
+        patch = activate_aegis(driver)
+
+        self.assertIs(getattr(driver, "_aegisai_patch"), patch)
+        deactivate_aegis(driver)
+        self.assertFalse(patch.active)
+
+    def test_universal_activate_patches_playwright_target(self) -> None:
+        from aegisai import activate_aegis, deactivate_aegis
+
+        page = self._PlaywrightPage()
+        patch = activate_aegis(page)
+
+        self.assertIs(getattr(page, "_aegisai_playwright_patch"), patch)
+        deactivate_aegis(page)
+        self.assertFalse(patch.active)
+
+    def test_universal_activate_detects_driver_from_caller_locals(self) -> None:
+        from aegisai import activate_aegis
+
+        def _caller():
+            driver = AutoDetectionTests._SeleniumDriver()
+            patch = activate_aegis()
+            return driver, patch
+
+        driver, patch = _caller()
+
+        self.assertIs(getattr(driver, "_aegisai_patch"), patch)
+
+    def test_script_import_detection_without_live_target_is_diagnostic(self) -> None:
+        from aegisai import FrameworkKind, detect_framework
+
+        with TemporaryDirectory() as tmp:
+            script = Path(tmp) / "sample_playwright_test.py"
+            script.write_text(
+                "from playwright.sync_api import sync_playwright\n"
+                "page.locator('#login').click()\n",
+                encoding="utf-8",
+            )
+            detection = detect_framework(script_path=script)
+
+        self.assertEqual(detection.kind, FrameworkKind.PLAYWRIGHT)
+        self.assertIsNone(detection.target)
+        self.assertEqual(detection.source, "script imports")
+
+
 class RegressionTests(unittest.TestCase):
     """Regression tests for bugs fixed in v0.2.0."""
 
