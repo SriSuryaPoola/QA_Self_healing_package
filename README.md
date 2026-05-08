@@ -64,6 +64,7 @@ Most self-healing approaches either retry blindly or jump straight to AI. AegisA
 | Review suggestions artifact | Available as `.aegisai/HEAL_SUGGESTIONS.json` |
 | pytest/unittest helpers | Available without replacing the existing runner |
 | DOM drift detection | Available for pre-failure locator drift checks |
+| Common QA locator anchors | Supports `data-testid`, `data-test`, `data-cy`, `data-qa`, `data-test-id`, and Angular `formControlName` |
 
 ## Healing Pipeline
 
@@ -111,17 +112,40 @@ L0 has an intentional limitation: it cannot change application state. If a login
 
 ## Benchmarks From This Build
 
-These results were observed on the local demo suite in this repository on May 7, 2026. Browser/network time is included for Selenium demo scripts, so the package overhead is much smaller than the end-to-end script duration.
+These results were observed on the local demo suite and public-repo validation workspace on May 8, 2026. Browser/network time is included for Selenium demo scripts, so the package overhead is much smaller than the end-to-end script duration.
 
 | Check | Result |
 |---|---|
-| Unit regression suite | 77 tests passed |
+| Unit regression suite | 90 tests passed |
 | Python compile check | Passed |
+| Public browser reliability suite | 9 tests passed |
 | L0 Selenium demo | Failed safely because modal was closed; no LLM call |
 | L1 Selenium demo | Passed, broken button text healed |
 | L2 Selenium demo | Passed, broken email/password/button locators healed |
 | L3 Selenium demo | Passed, heuristic email/password/button healing |
 | L4 Selenium demo | Passed, live JS probe email/password/button healing |
+| Auto-activation L0-L5 demo | L1-L4 healed; L0 and L5 failed safely where expected |
+| All-layers Boltzmann demo | Passed |
+
+Large public repo corpus result:
+
+| Corpus | Result |
+|---|---:|
+| Public repo | `angular/components` |
+| HTML templates scanned | 671 |
+| Generated broken locator mutations | 1,500 |
+| Successful heals | 1,101 |
+| Success rate | 73.4% |
+| False positives | 0 |
+| Average SDK heal time | 0.4545 ms |
+| p95 SDK heal time | 1.3473 ms |
+
+The Angular corpus exposed real product improvements that were added to the package:
+
+- Stable-token drift healing for suffix/prefix changes such as `scene-content-container-legacy`.
+- Support for common QA attributes beyond `data-testid`: `data-test`, `data-cy`, `data-qa`, and `data-test-id`.
+- Support for Angular `formControlName` as a stable locator anchor.
+- Safer ambiguity behavior: repeated equivalent elements are still blocked instead of guessed.
 
 Approximate demo script durations observed locally:
 
@@ -756,11 +780,13 @@ Current public targets:
 |---|---|---|
 | `saucelabs/the-internet` | `https://the-internet.herokuapp.com` | Selenium login healing, Selenium iframe discovery, Selenium L4 Shadow DOM probing, Playwright auto-activation, Playwright manual SDK |
 | SauceDemo public app | `https://www.saucedemo.com` | Selenium login-form locator drift against a second public UI |
+| `robotframework/WebDemo` | Local `file:///` clone | Selenium and Playwright login-form healing against a classic SeleniumLibrary demo app |
+| `angular/components` | Local HTML corpus | 1,500 generated locator mutations across 671 real Angular templates |
 
 Latest verified public-suite result:
 
 ```text
-7 passed
+9 passed
 ```
 
 ## Benchmark Methodology
@@ -770,6 +796,16 @@ The benchmark numbers in this README are intentionally practical rather than syn
 ```powershell
 python -m pytest tests/test_core.py -q
 $env:AEGISAI_RUN_PUBLIC_REPO_TESTS="1"; python -m pytest tests/reliability -q
+```
+
+Run the large public HTML corpus evaluator:
+
+```powershell
+python "<sample-root>\public repos\scripts\evaluate_aegisai_on_html_corpus.py" `
+  --repo "<sample-root>\public repos\repos\angular-components" `
+  --package-root "." `
+  --out-dir "<sample-root>\public repos\results" `
+  --max-cases 1500
 ```
 
 When comparing layers, remember that Selenium demo scripts intentionally include browser/network overhead. The local L0-L4 healing code itself is much faster than the full script duration.
@@ -797,6 +833,8 @@ The important architectural decision is that AegisAI is a package, not a platfor
 - Selenium has the deepest live-browser cascade and source persistence path today.
 - Playwright supports common sync and async locator actions, but full L5 parity is still planned.
 - Simple Selenium iframe discovery and L4 Shadow DOM probing are supported; complex nested frame/web-component flows still need more hardening.
+- Repeated equivalent elements are intentionally blocked when AegisAI cannot choose safely. Future context-aware scoring should use nearby labels, section headings, table headers, form groups, and component ancestry to reduce these safe blocks.
+- Generic `input[type="text"]` locators are weak signals in large apps because many text inputs can look equivalent.
 - AegisAI fixes broken locators; it does not guess business intent when a test intentionally uses the wrong credentials or wrong expected behavior.
 
 ## FAQ
@@ -832,7 +870,7 @@ The important architectural decision is that AegisAI is a package, not a platfor
 
 ## Current Status
 
-AegisAI is an alpha package with a working Selenium L0-L5 cascade, Selenium helper functions, opt-in Selenium auto-activation, sync and async Playwright helpers, opt-in sync/async Playwright auto-activation for common locator actions, local Security Officer governance, optional LLM configuration, deterministic SDK healing, explicit Playwright hooks, dry-run/audit mode, local cache, JSON reports, and review-required source suggestions.
+AegisAI is an alpha package with a working Selenium L0-L5 cascade, Selenium helper functions, opt-in Selenium auto-activation, sync and async Playwright helpers, opt-in sync/async Playwright auto-activation for common locator actions, local Security Officer governance, optional LLM configuration, deterministic SDK healing, explicit Playwright hooks, dry-run/audit mode, local cache, JSON reports, review-required source suggestions, common QA locator anchor support, and large public-repo corpus validation.
 
 The most mature path today is still Selenium because it has the deepest live-browser cascade, simple iframe discovery, L4 Shadow DOM probing, and script persistence support. Playwright is now usable for common sync and async `page.locator(...).fill()/click()` workflows. Playwright L5 and deeply nested iframe/web-component traversal should still be treated as future hardening areas.
 
