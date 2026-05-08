@@ -185,17 +185,18 @@ class SecurityOfficer:
         source: str,
         confidence: float,
     ) -> tuple[Any, ...]:
-        attrs = tuple(sorted((key, _cache_key_attr_value(key, value)) for key, value in element.attrs.items()))
+        redacted = redact_dom_element(element)
+        attrs = redacted.get("attrs") or {}
         return (
             old_locator,
             new_locator,
             source,
             confidence,
-            element.tag,
-            attrs,
-            _cache_key_text(element.text),
-            element.role,
-            element.stable_locator(),
+            redacted.get("tag"),
+            tuple(sorted(attrs.items())),
+            redacted.get("text"),
+            redacted.get("role"),
+            redacted.get("locator"),
         )
 
     def _runtime_allowed(self, risk: RiskLevel) -> bool:
@@ -250,16 +251,3 @@ class SecurityOfficer:
             if "email" in lowered and element.attrs.get("type") == "email":
                 return element
         return elements[0] if elements else DomElement(tag="unknown")
-
-
-def _cache_key_attr_value(key: str, value: str) -> str:
-    return "***MASKED***" if key.lower() in {"value", "authorization", "cookie"} else value
-
-
-def _cache_key_text(text: str) -> str:
-    if not text:
-        return ""
-    lowered = text.lower()
-    if any(secret in lowered for secret in ("password", "token", "secret", "api key")):
-        return "***MASKED***"
-    return text[:120]
