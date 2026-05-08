@@ -13,6 +13,7 @@ from .reporting import HealingReport, get_session_report, summarize_report
 from .sdk import AegisAI
 from .security import load_security_policy
 from .state import is_state_poisoned
+from .utils.config import AegisConfig, ReportConfig
 from .utils.llm_config import (
     DEFAULT_MODELS,
     LLMSettings,
@@ -26,7 +27,8 @@ from .utils.llm_config import (
 def _heal(args: argparse.Namespace) -> int:
     dom = Path(args.dom_file).read_text(encoding="utf-8")
     policy = load_security_policy(args.policy_file) if args.policy_file else None
-    app = AegisAI(security_policy=policy)
+    config = AegisConfig(report=ReportConfig(enabled=bool(args.report_file)))
+    app = AegisAI(config=config, security_policy=policy)
     result = app.heal_locator(
         args.locator,
         dom,

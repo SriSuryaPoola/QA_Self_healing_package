@@ -47,7 +47,7 @@ class CacheConfig:
 
 @dataclass(frozen=True)
 class ReportConfig:
-    enabled: bool = True
+    enabled: bool = False
     path: str = ".aegisai/reports/latest.json"
 
 
