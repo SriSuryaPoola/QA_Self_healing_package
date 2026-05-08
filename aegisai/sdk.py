@@ -75,7 +75,6 @@ class AegisAI:
 
         started = time.perf_counter()
         dom_key = self._dom_cache_key(dom)
-        elements = self._parse_dom(dom, dom_key)
         scope = cache_scope or "default"
         history = historical_success or {}
         runtime_cache_key = self._runtime_cache_key(
@@ -90,6 +89,7 @@ class AegisAI:
                 self._runtime_result_cache.move_to_end(runtime_cache_key)
                 return cached_runtime_result
 
+        elements = self._parse_dom(dom, dom_key)
         request = HealRequest(
             failing_locator=failing_locator,
             elements=elements,

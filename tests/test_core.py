@@ -1304,14 +1304,22 @@ class BrowserComplexityTests(unittest.TestCase):
     def test_sdk_reuses_safe_runtime_results_when_report_disabled(self) -> None:
         app = AegisAI()
         original_review = app.security_officer.review_candidate
+        original_parse = app._parse_dom
         calls = 0
+        parse_calls = 0
 
         def counted_review(**kwargs):
             nonlocal calls
             calls += 1
             return original_review(**kwargs)
 
+        def counted_parse(dom, key=None):
+            nonlocal parse_calls
+            parse_calls += 1
+            return original_parse(dom, key)
+
         app.security_officer.review_candidate = counted_review
+        app._parse_dom = counted_parse
         dom = '<input type="email">'
 
         first = app.heal_locator("//input[@type='email']", dom, use_cache=False)
@@ -1319,6 +1327,7 @@ class BrowserComplexityTests(unittest.TestCase):
 
         self.assertEqual(first.locator, second.locator)
         self.assertEqual(calls, 1)
+        self.assertEqual(parse_calls, 1)
         self.assertLessEqual(len(app._runtime_result_cache), app._runtime_result_cache_size)
 
     def test_long_run_repeated_healing_is_stable(self) -> None:
