@@ -480,13 +480,7 @@ python -m aegisai configure llm --status
 
 ## Real-World Reliability Checks
 
-AegisAI includes an opt-in public-repo reliability suite under `tests/reliability`. These tests launch real browsers and validate the package against public QA/demo applications, so they are skipped during normal `pytest` runs unless explicitly enabled.
-
-Clone the public app replicas:
-
-```powershell
-& ".\public repos\scripts\clone_public_repos.ps1"
-```
+AegisAI includes an opt-in real-world reliability suite under `tests/reliability`. These tests launch real browsers and validate the package against public QA/demo applications, so they are skipped during normal `pytest` runs unless explicitly enabled.
 
 Run the real-world suite:
 
@@ -501,15 +495,12 @@ Current public targets:
 | Public repo | Runtime target | Coverage |
 |---|---|---|
 | `saucelabs/the-internet` | `https://the-internet.herokuapp.com` | Selenium login healing, iframe shortcoming, Shadow DOM shortcoming, Playwright manual SDK |
-| `saucelabs/sample-app-web` | local replica only for now | Future modern app coverage |
 
 Latest verified public-suite result:
 
 ```text
 5 passed
 ```
-
-See `public repos/REAL_WORLD_FINDINGS.md` for the current capability and shortcoming report.
 
 ## Design Principles
 
