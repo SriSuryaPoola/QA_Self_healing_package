@@ -43,6 +43,8 @@ class AegisAI:
         self.cache = LocatorCache(self.config.cache.path, disabled=not self.config.cache.enabled)
         self._parsed_dom_cache: OrderedDict[str, list[DomElement]] = OrderedDict()
         self._parsed_dom_cache_size = 32
+        self._deterministic_result_cache: OrderedDict[tuple[object, ...], HealResult] = OrderedDict()
+        self._deterministic_result_cache_size = 64
         self._llm_engine: StrictJsonLLMEngine | None = (
             StrictJsonLLMEngine(
                 adapter=llm_adapter,
@@ -70,7 +72,8 @@ class AegisAI:
         """
 
         started = time.perf_counter()
-        elements = self._parse_dom(dom)
+        dom_key = self._dom_cache_key(dom)
+        elements = self._parse_dom(dom, dom_key)
         scope = cache_scope or "default"
         request = HealRequest(
             failing_locator=failing_locator,
@@ -98,7 +101,7 @@ class AegisAI:
                     )
                     return cached_result
 
-        result = self.deterministic.heal(request)
+        result = self._deterministic_heal(request, dom_key)
         decision = self.guardrails.validate(request, result)
 
         if decision.allowed and result.candidate:
@@ -285,8 +288,12 @@ class AegisAI:
             llm_used=True,
         )
 
-    def _parse_dom(self, dom: str) -> list[DomElement]:
-        key = hashlib.blake2s(dom.encode("utf-8", errors="surrogatepass"), digest_size=16).hexdigest()
+    @staticmethod
+    def _dom_cache_key(dom: str) -> str:
+        return hashlib.blake2s(dom.encode("utf-8", errors="surrogatepass"), digest_size=16).hexdigest()
+
+    def _parse_dom(self, dom: str, key: str | None = None) -> list[DomElement]:
+        key = key or self._dom_cache_key(dom)
         cached = self._parsed_dom_cache.get(key)
         if cached is not None:
             self._parsed_dom_cache.move_to_end(key)
@@ -297,6 +304,24 @@ class AegisAI:
         if len(self._parsed_dom_cache) > self._parsed_dom_cache_size:
             self._parsed_dom_cache.popitem(last=False)
         return elements
+
+    def _deterministic_heal(self, request: HealRequest, dom_key: str) -> HealResult:
+        cache_key = (
+            request.failing_locator,
+            dom_key,
+            request.context_path,
+            tuple(sorted(request.historical_success.items())),
+        )
+        cached = self._deterministic_result_cache.get(cache_key)
+        if cached is not None:
+            self._deterministic_result_cache.move_to_end(cache_key)
+            return cached
+
+        result = self.deterministic.heal(request)
+        self._deterministic_result_cache[cache_key] = result
+        if len(self._deterministic_result_cache) > self._deterministic_result_cache_size:
+            self._deterministic_result_cache.popitem(last=False)
+        return result
 
     @staticmethod
     def _element_for_locator(locator: str, elements: list[DomElement]) -> DomElement | None:

@@ -781,6 +781,18 @@ class ReportingCacheDryRunTests(unittest.TestCase):
         self.assertIn('"success": 1', payload)
         self.assertIn('"L2:deterministic": 1', payload)
 
+    def test_sdk_report_recording_is_opt_in(self) -> None:
+        from aegisai.reporting import reset_session_report
+        from aegisai.utils.config import AegisConfig, ReportConfig
+
+        reset_session_report()
+        AegisAI().heal_locator("//input[@type='email']", '<input type="email">', use_cache=False)
+        self.assertEqual(len(reset_session_report().events), 0)
+
+        app = AegisAI(config=AegisConfig(report=ReportConfig(enabled=True)))
+        app.heal_locator("//input[@type='email']", '<input type="email">', use_cache=False)
+        self.assertEqual(len(app.report.events), 1)
+
     def test_locator_cache_reuses_same_dom_fingerprint(self) -> None:
         from aegisai.utils.config import AegisConfig, CacheConfig
 
@@ -1268,6 +1280,26 @@ class BrowserComplexityTests(unittest.TestCase):
 
         self.assertIs(first, second)
         self.assertLessEqual(len(app._parsed_dom_cache), app._parsed_dom_cache_size)
+
+    def test_sdk_reuses_deterministic_results(self) -> None:
+        app = AegisAI()
+        original_heal = app.deterministic.heal
+        calls = 0
+
+        def counted_heal(request):
+            nonlocal calls
+            calls += 1
+            return original_heal(request)
+
+        app.deterministic.heal = counted_heal
+        dom = '<input type="email">'
+
+        first = app.heal_locator("//input[@type='email']", dom, use_cache=False)
+        second = app.heal_locator("//input[@type='email']", dom, use_cache=False)
+
+        self.assertEqual(first.locator, second.locator)
+        self.assertEqual(calls, 1)
+        self.assertLessEqual(len(app._deterministic_result_cache), app._deterministic_result_cache_size)
 
     def test_long_run_repeated_healing_is_stable(self) -> None:
         from aegisai.utils.config import AegisConfig, CacheConfig
