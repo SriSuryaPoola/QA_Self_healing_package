@@ -77,15 +77,13 @@ class AegisAI:
         dom_key = self._dom_cache_key(dom)
         scope = cache_scope or "default"
         history = historical_success or {}
-        runtime_cache_enabled = use_cache is False and not self.config.report.enabled
-        runtime_cache_key: tuple[object, ...] | None = None
-        if runtime_cache_enabled:
-            runtime_cache_key = self._runtime_cache_key(
-                failing_locator=failing_locator,
-                dom_key=dom_key,
-                expected_role=expected_role,
-                historical_success=history,
-            )
+        runtime_cache_key = self._runtime_cache_key(
+            failing_locator=failing_locator,
+            dom_key=dom_key,
+            expected_role=expected_role,
+            historical_success=history,
+        )
+        if use_cache is False and not self.config.report.enabled:
             cached_runtime_result = self._runtime_result_cache.get(runtime_cache_key)
             if cached_runtime_result is not None:
                 self._runtime_result_cache.move_to_end(runtime_cache_key)
@@ -170,7 +168,7 @@ class AegisAI:
                 persistence_decision=security.policy_label,
                 reason=decision.reason,
             )
-            if runtime_cache_enabled and runtime_cache_key is not None and not healed.llm_used:
+            if use_cache is False and not self.config.report.enabled and not healed.llm_used:
                 self._remember_runtime_result(runtime_cache_key, healed)
             return healed
 
