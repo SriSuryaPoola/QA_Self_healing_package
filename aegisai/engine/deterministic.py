@@ -26,6 +26,21 @@ _TOKEN_ALIASES = {
     "logon": "login",
 }
 
+_DRIFT_TOKEN_NOISE = {
+    "legacy",
+    "old",
+    "new",
+    "changed",
+    "updated",
+    "missing",
+}
+
+_STRUCTURAL_EXTRA_TOKENS = {
+    "aria",
+    "label",
+    "href",
+    "testid",
+}
 
 class DeterministicEngine:
     def __init__(self, confidence_threshold: float = 0.85) -> None:
@@ -68,17 +83,23 @@ class DeterministicEngine:
 
     @staticmethod
     def _locator_tokens(locator: str) -> set[str]:
-        expanded: set[str] = set()
-        for token in TOKEN_PATTERN.findall(locator):
-            for part in re.split(r"[-_]+", token.lower()):
-                if part:
-                    expanded.add(_TOKEN_ALIASES.get(part, part))
-        return expanded - _LOCATOR_NOISE
+        return _tokenize(locator, noise=_LOCATOR_NOISE)
 
     @staticmethod
     def _attribute_match(tokens: set[str], element: DomElement) -> float:
         if not tokens:
             return 0.0
+        stable = element.stable_locator()
+        stable_tokens = DeterministicEngine._locator_tokens(stable or "")
+        if stable_tokens and stable_tokens.issubset(tokens):
+            extra_tokens = tokens - stable_tokens
+            structural_tokens = (
+                DeterministicEngine._locator_tokens(element.tag)
+                | _DRIFT_TOKEN_NOISE
+                | _STRUCTURAL_EXTRA_TOKENS
+            )
+            if extra_tokens.issubset(structural_tokens):
+                return 1.0
         # Include tag name, all attribute keys AND values so XPath patterns like
         # //input[@type='email'] correctly match tag='input', key='type', value='email'
         value_pool = [
@@ -114,3 +135,12 @@ class DeterministicEngine:
             f"dom_proximity={proximity:.2f}; "
             f"historical_success={history:.2f}"
         )
+
+
+def _tokenize(locator: str, *, noise: set[str]) -> set[str]:
+    expanded: set[str] = set()
+    for token in TOKEN_PATTERN.findall(locator):
+        for part in re.split(r"[-_]+", token.lower()):
+            if part:
+                expanded.add(_TOKEN_ALIASES.get(part, part))
+    return expanded - noise

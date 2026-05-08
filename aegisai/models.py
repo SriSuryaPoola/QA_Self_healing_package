@@ -20,12 +20,15 @@ class DomElement:
     def stable_locator(self) -> str | None:
         """Return the safest locator available for persistence or execution."""
 
-        if "data-testid" in self.attrs:
-            return f'[data-testid="{self.attrs["data-testid"]}"]'
+        for attr in ("data-testid", "data-test", "data-cy", "data-qa", "data-test-id"):
+            if attr in self.attrs:
+                return f'[{attr}="{self.attrs[attr]}"]'
         if "id" in self.attrs:
             return f'#{self.attrs["id"]}'
         if "name" in self.attrs:
             return f'[name="{self.attrs["name"]}"]'
+        if "formcontrolname" in self.attrs:
+            return f'[formcontrolname="{self.attrs["formcontrolname"]}"]'
         if "aria-label" in self.attrs:
             return f'[aria-label="{self.attrs["aria-label"]}"]'
         if "href" in self.attrs and self.tag == "a":

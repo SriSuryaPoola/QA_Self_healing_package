@@ -117,7 +117,7 @@ def test_selenium_heals_saucedemo_login_form(driver):
     patch = _activate(driver)
 
     username = driver.find_element(By.XPATH, "//input[@id='username-field']")
-    username_outcome = _assert_healed(patch, "user-name")
+    username_outcome = _assert_healed(patch, "username")
     username.send_keys("standard_user")
 
     password = driver.find_element(By.XPATH, "//input[@id='pass-field']")

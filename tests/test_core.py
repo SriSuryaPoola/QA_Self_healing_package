@@ -47,6 +47,25 @@ class DomAndHealingTests(unittest.TestCase):
         self.assertNotIn("secret", serialized)
         self.assertNotIn("csrf-123", serialized)
 
+    def test_dom_parser_keeps_common_qa_locator_attributes(self) -> None:
+        html = '<input data-cy="email-input" formControlName="email">'
+        element = parse_dom_subset(html)[0]
+
+        self.assertEqual(element.attrs["data-cy"], "email-input")
+        self.assertEqual(element.attrs["formcontrolname"], "email")
+        self.assertEqual(element.stable_locator(), '[data-cy="email-input"]')
+
+    def test_form_control_name_can_be_used_as_stable_locator(self) -> None:
+        html = '<input formControlName="email">'
+        result = AegisAI().heal_locator(
+            "//input[@formControlName='email-legacy']",
+            html,
+            use_cache=False,
+        )
+
+        self.assertEqual(result.locator, '[formcontrolname="email"]')
+        self.assertTrue(result.guardrail.allowed)
+
     def test_deterministic_heal_prefers_data_testid(self) -> None:
         html = '<button data-testid="login-button" aria-label="Log in">Log in</button>'
         result = AegisAI().heal_locator("#login", html, expected_role="button")
@@ -320,6 +339,56 @@ class RegressionTests(unittest.TestCase):
 
         tokens = DeterministicEngine._locator_tokens("//input[@id='pass-field']")
         self.assertEqual(tokens, {"input", "password"})
+
+    def test_broken_id_suffix_heals_when_stable_tokens_are_preserved(self) -> None:
+        result = AegisAI().heal_locator(
+            "//div[@id='scene-content-container-legacy']",
+            '<div id="scene-content-container"></div>',
+            use_cache=False,
+        )
+
+        self.assertEqual(result.locator, "#scene-content-container")
+        self.assertTrue(result.guardrail.allowed)
+
+    def test_broken_aria_label_suffix_heals_when_label_tokens_are_preserved(self) -> None:
+        result = AegisAI().heal_locator(
+            "//button[@aria-label='Clear type filter legacy']",
+            '<button aria-label="Clear type filter"></button>',
+            use_cache=False,
+        )
+
+        self.assertEqual(result.locator, '[aria-label="Clear type filter"]')
+        self.assertTrue(result.guardrail.allowed)
+
+    def test_custom_element_tag_tokens_do_not_block_stable_label_heal(self) -> None:
+        result = AegisAI().heal_locator(
+            "//mat-button-toggle-group[@aria-label='Font Style legacy']",
+            '<mat-button-toggle-group aria-label="Font Style"></mat-button-toggle-group>',
+            use_cache=False,
+        )
+
+        self.assertEqual(result.locator, '[aria-label="Font Style"]')
+        self.assertTrue(result.guardrail.allowed)
+
+    def test_subset_boost_prefers_more_specific_locator_tokens(self) -> None:
+        result = AegisAI().heal_locator(
+            "//div[@id='single-select-change-counter-legacy']",
+            '<div id="single-select"></div><div id="single-select-change-counter"></div>',
+            use_cache=False,
+        )
+
+        self.assertEqual(result.locator, "#single-select-change-counter")
+        self.assertTrue(result.guardrail.allowed)
+
+    def test_broken_id_suffix_can_heal_to_input_type_locator(self) -> None:
+        result = AegisAI().heal_locator(
+            "//input[@id='password-field-legacy']",
+            '<input type="password">',
+            use_cache=False,
+        )
+
+        self.assertEqual(result.locator, 'input[type="password"]')
+        self.assertTrue(result.guardrail.allowed)
 
     def test_llm_fallback_locator_must_match_filtered_dom(self) -> None:
         import json
