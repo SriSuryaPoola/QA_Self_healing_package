@@ -36,6 +36,13 @@ logs/
 *.backup
 *.orig
 
+# Local autoresearch run-control artifacts
+autoresearch-*.json
+autoresearch-*.log
+autoresearch-lessons.md
+research-results.tsv
+research-results.prev.tsv
+
 # Python caches, virtual environments, and build artifacts
 __pycache__/
 *.py[cod]
