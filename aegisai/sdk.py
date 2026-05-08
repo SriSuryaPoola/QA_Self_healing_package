@@ -45,6 +45,8 @@ class AegisAI:
         self._parsed_dom_cache_size = 32
         self._deterministic_result_cache: OrderedDict[tuple[object, ...], HealResult] = OrderedDict()
         self._deterministic_result_cache_size = 64
+        self._runtime_result_cache: OrderedDict[tuple[object, ...], HealResult] = OrderedDict()
+        self._runtime_result_cache_size = 128
         self._llm_engine: StrictJsonLLMEngine | None = (
             StrictJsonLLMEngine(
                 adapter=llm_adapter,
@@ -75,11 +77,24 @@ class AegisAI:
         dom_key = self._dom_cache_key(dom)
         elements = self._parse_dom(dom, dom_key)
         scope = cache_scope or "default"
+        history = historical_success or {}
+        runtime_cache_key = self._runtime_cache_key(
+            failing_locator=failing_locator,
+            dom_key=dom_key,
+            expected_role=expected_role,
+            historical_success=history,
+        )
+        if use_cache is False and not self.config.report.enabled:
+            cached_runtime_result = self._runtime_result_cache.get(runtime_cache_key)
+            if cached_runtime_result is not None:
+                self._runtime_result_cache.move_to_end(runtime_cache_key)
+                return cached_runtime_result
+
         request = HealRequest(
             failing_locator=failing_locator,
             elements=elements,
             expected_role=expected_role,
-            historical_success=historical_success or {},
+            historical_success=history,
         )
 
         if use_cache is not False:
@@ -153,6 +168,8 @@ class AegisAI:
                 persistence_decision=security.policy_label,
                 reason=decision.reason,
             )
+            if use_cache is False and not self.config.report.enabled and not healed.llm_used:
+                self._remember_runtime_result(runtime_cache_key, healed)
             return healed
 
         if self._llm_engine is not None:
@@ -322,6 +339,28 @@ class AegisAI:
         if len(self._deterministic_result_cache) > self._deterministic_result_cache_size:
             self._deterministic_result_cache.popitem(last=False)
         return result
+
+    def _runtime_cache_key(
+        self,
+        *,
+        failing_locator: str,
+        dom_key: str,
+        expected_role: str | None,
+        historical_success: dict[str, float],
+    ) -> tuple[object, ...]:
+        return (
+            failing_locator,
+            dom_key,
+            expected_role,
+            tuple(sorted(historical_success.items())),
+            self.config.guardrails.confidence_threshold,
+            self.security_officer.policy,
+        )
+
+    def _remember_runtime_result(self, cache_key: tuple[object, ...], result: HealResult) -> None:
+        self._runtime_result_cache[cache_key] = result
+        if len(self._runtime_result_cache) > self._runtime_result_cache_size:
+            self._runtime_result_cache.popitem(last=False)
 
     @staticmethod
     def _element_for_locator(locator: str, elements: list[DomElement]) -> DomElement | None:
