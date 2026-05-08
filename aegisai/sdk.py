@@ -86,7 +86,6 @@ class AegisAI:
         if use_cache is False and not self.config.report.enabled:
             cached_runtime_result = self._runtime_result_cache.get(runtime_cache_key)
             if cached_runtime_result is not None:
-                self._runtime_result_cache.move_to_end(runtime_cache_key)
                 return cached_runtime_result
 
         elements = self._parse_dom(dom, dom_key)
