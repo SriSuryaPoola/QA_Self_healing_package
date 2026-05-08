@@ -1330,6 +1330,21 @@ class BrowserComplexityTests(unittest.TestCase):
         self.assertEqual(parse_calls, 1)
         self.assertLessEqual(len(app._runtime_result_cache), app._runtime_result_cache_size)
 
+    def test_sdk_skips_runtime_cache_key_when_persistent_cache_enabled(self) -> None:
+        app = AegisAI()
+        calls = 0
+
+        def counted_runtime_key(**kwargs):
+            nonlocal calls
+            calls += 1
+            return ("unexpected",)
+
+        app._runtime_cache_key = counted_runtime_key
+        result = app.heal_locator("//input[@type='email']", '<input type="email">')
+
+        self.assertEqual(result.locator, 'input[type="email"]')
+        self.assertEqual(calls, 0)
+
     def test_long_run_repeated_healing_is_stable(self) -> None:
         from aegisai.utils.config import AegisConfig, CacheConfig
 
