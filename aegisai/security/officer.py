@@ -7,6 +7,7 @@ and persistence are allowed.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Any
 
 from aegisai.models import DomElement
@@ -20,6 +21,8 @@ class SecurityOfficer:
     def __init__(self, policy: SecurityPolicy | None = None) -> None:
         self.policy = policy or SecurityPolicy()
         self._audit_keys: set[tuple[Any, ...]] = set()
+        self._decision_cache: OrderedDict[tuple[Any, ...], SecurityDecision] = OrderedDict()
+        self._decision_cache_size = 128
 
     def review_candidate(
         self,
@@ -30,6 +33,19 @@ class SecurityOfficer:
         source: str,
         confidence: float,
     ) -> SecurityDecision:
+        cache_key = self._decision_cache_key(
+            old_locator=old_locator,
+            new_locator=new_locator,
+            element=element,
+            source=source,
+            confidence=confidence,
+        )
+        if self.policy.audit_deduplicate:
+            cached = self._decision_cache.get(cache_key)
+            if cached is not None:
+                self._decision_cache.move_to_end(cache_key)
+                return cached
+
         risk = self.classify_risk(old_locator=old_locator, new_locator=new_locator, element=element)
         threshold_reason = self._confidence_reason(risk, confidence)
         runtime_allowed = self._runtime_allowed(risk) and threshold_reason is None
@@ -63,6 +79,10 @@ class SecurityOfficer:
         }
         if self._should_audit(decision) and self._remember_audit_event(event):
             self.audit(event)
+        if self.policy.audit_deduplicate:
+            self._decision_cache[cache_key] = decision
+            if len(self._decision_cache) > self._decision_cache_size:
+                self._decision_cache.popitem(last=False)
         return decision
 
     def build_llm_payload(
@@ -155,6 +175,29 @@ class SecurityOfficer:
             return False
         self._audit_keys.add(key)
         return True
+
+    @staticmethod
+    def _decision_cache_key(
+        *,
+        old_locator: str,
+        new_locator: str,
+        element: DomElement,
+        source: str,
+        confidence: float,
+    ) -> tuple[Any, ...]:
+        redacted = redact_dom_element(element)
+        attrs = redacted.get("attrs") or {}
+        return (
+            old_locator,
+            new_locator,
+            source,
+            confidence,
+            redacted.get("tag"),
+            tuple(sorted(attrs.items())),
+            redacted.get("text"),
+            redacted.get("role"),
+            redacted.get("locator"),
+        )
 
     def _runtime_allowed(self, risk: RiskLevel) -> bool:
         if risk == RiskLevel.CRITICAL:
