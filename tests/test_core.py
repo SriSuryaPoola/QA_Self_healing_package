@@ -1259,6 +1259,16 @@ class BrowserComplexityTests(unittest.TestCase):
         self.assertEqual(result.locator, 'input[type="email"]')
         self.assertLess(elapsed_ms, 250)
 
+    def test_sdk_reuses_parsed_dom_snapshots(self) -> None:
+        app = AegisAI()
+        dom = '<form><input type="email"><button>Login</button></form>'
+
+        first = app._parse_dom(dom)
+        second = app._parse_dom(dom)
+
+        self.assertIs(first, second)
+        self.assertLessEqual(len(app._parsed_dom_cache), app._parsed_dom_cache_size)
+
     def test_long_run_repeated_healing_is_stable(self) -> None:
         from aegisai.utils.config import AegisConfig, CacheConfig
 

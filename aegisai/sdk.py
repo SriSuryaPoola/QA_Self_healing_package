@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
+from collections import OrderedDict
 
 from .cache import LocatorCache
 from .engine.deterministic import DeterministicEngine
@@ -39,6 +41,8 @@ class AegisAI:
         self.security_officer = SecurityOfficer(security_policy)
         self.report: HealingReport = get_session_report()
         self.cache = LocatorCache(self.config.cache.path, disabled=not self.config.cache.enabled)
+        self._parsed_dom_cache: OrderedDict[str, list[DomElement]] = OrderedDict()
+        self._parsed_dom_cache_size = 32
         self._llm_engine: StrictJsonLLMEngine | None = (
             StrictJsonLLMEngine(
                 adapter=llm_adapter,
@@ -66,7 +70,7 @@ class AegisAI:
         """
 
         started = time.perf_counter()
-        elements = parse_dom_subset(dom)
+        elements = self._parse_dom(dom)
         scope = cache_scope or "default"
         request = HealRequest(
             failing_locator=failing_locator,
@@ -280,6 +284,19 @@ class AegisAI:
             guardrail=llm_decision,
             llm_used=True,
         )
+
+    def _parse_dom(self, dom: str) -> list[DomElement]:
+        key = hashlib.blake2s(dom.encode("utf-8", errors="surrogatepass"), digest_size=16).hexdigest()
+        cached = self._parsed_dom_cache.get(key)
+        if cached is not None:
+            self._parsed_dom_cache.move_to_end(key)
+            return cached
+
+        elements = parse_dom_subset(dom)
+        self._parsed_dom_cache[key] = elements
+        if len(self._parsed_dom_cache) > self._parsed_dom_cache_size:
+            self._parsed_dom_cache.popitem(last=False)
+        return elements
 
     @staticmethod
     def _element_for_locator(locator: str, elements: list[DomElement]) -> DomElement | None:
