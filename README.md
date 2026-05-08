@@ -47,8 +47,11 @@ Most self-healing approaches either retry blindly or jump straight to AI. AegisA
 | Selenium opt-in auto-activation | Available through `activate_aegis(driver, ...)` |
 | Selenium safe script persistence | Available when policy allows |
 | Playwright core SDK healing | Available manually via `page.content()` |
+| Playwright helper functions | Available through `heal_fill`, `heal_click`, `heal_selector` |
+| Playwright opt-in auto-activation | Available for sync `page.locator(...).fill()/click()` style actions |
 | Playwright page hooks | Available for explicit failure/action context capture |
-| Playwright full automatic L0-L5 listener | Planned, not advertised as automatic yet |
+| Playwright full L0-L4 automatic listener | Available for common sync locator actions |
+| Playwright L5 LLM fallback | Planned; use explicit SDK/LLM path for now |
 | LLM provider setup CLI | Available through `aegisai configure llm` |
 | Security Officer governance | Available |
 
@@ -410,35 +413,86 @@ activate_aegis(driver, enable_llm=True)
 
 ## Playwright Usage
 
-Current Playwright support is explicit and framework-friendly. The package does not automatically patch Playwright locators yet, but you can use the core SDK to heal selectors from page HTML.
+Playwright now has the same adoption philosophy as Selenium: keep your framework, opt in locally, and let AegisAI heal failed selectors without moving execution into another platform.
+
+### Option A: Auto-Activation
+
+Auto-activation patches only the supplied sync Playwright `page` instance. It wraps `page.locator(...)` so failed common actions such as `.fill()`, `.click()`, `.is_visible()`, `.input_value()`, and `.text_content()` retry through the L0-L4 healing path.
 
 ```python
 from playwright.sync_api import sync_playwright
 
-from aegisai import AegisAI
+from aegisai.playwright import activate_aegis
 
-app = AegisAI()
+with sync_playwright() as p:
+    browser = p.chromium.launch()
+    page = browser.new_page()
+
+    activate_aegis(page)
+
+    page.goto("https://example.com/login")
+
+    # Existing Playwright style can stay mostly unchanged.
+    page.locator("xpath=//input[@id='email-field']").fill("qa@example.com")
+    page.locator("xpath=//input[@id='pass-field']").fill("secret")
+    page.locator("xpath=//button[@data-testid='login-submit']").click()
+
+    browser.close()
+```
+
+You can restore raw Playwright behavior:
+
+```python
+from aegisai.playwright import activate_aegis, deactivate_aegis
+
+patch = activate_aegis(page)
+
+# Later:
+patch.restore()
+
+# Or:
+deactivate_aegis(page)
+```
+
+### Option B: Helper Functions
+
+Helper mode avoids patching the page object while still protecting individual actions.
+
+```python
+from playwright.sync_api import sync_playwright
+
+from aegisai.playwright import heal_click, heal_fill
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page()
     page.goto("https://example.com/login")
 
-    broken_selector = "#email-field"
-
-    try:
-        page.locator(broken_selector).fill("qa@example.com")
-    except Exception:
-        result = app.heal_locator(
-            failing_locator=broken_selector,
-            dom=page.content(),
-            expected_role="textbox",
-        )
-        if not result.locator:
-            raise
-        page.locator(result.locator).fill("qa@example.com")
+    heal_fill(page, "xpath=//input[@id='email-field']", "qa@example.com")
+    heal_fill(page, "xpath=//input[@id='pass-field']", "secret")
+    heal_click(page, "xpath=//button[@data-testid='login-submit']")
 
     browser.close()
+```
+
+### Option C: Manual SDK
+
+For maximum control, call the core SDK with `page.content()` and decide how to apply the healed selector yourself.
+
+```python
+from aegisai import AegisAI
+
+app = AegisAI()
+result = app.heal_locator(
+    failing_locator="#email-field",
+    dom=page.content(),
+    expected_role="textbox",
+)
+
+if not result.locator:
+    raise RuntimeError(result.guardrail.reason)
+
+page.locator(result.locator).fill("qa@example.com")
 ```
 
 You can also record Playwright failure context explicitly:
@@ -456,7 +510,7 @@ hooks.wrap_action(
 )
 ```
 
-This keeps Playwright support honest and composable: use the SDK today, add automatic Playwright healing later without changing the package philosophy.
+Playwright support is still intentionally honest: common sync locator actions now auto-heal through L0-L4, while Playwright L5/LLM fallback, async Playwright patching, iframe auto-switching, and Shadow DOM piercing remain future hardening areas.
 
 ## CLI Smoke Checks
 
@@ -494,12 +548,12 @@ Current public targets:
 
 | Public repo | Runtime target | Coverage |
 |---|---|---|
-| `saucelabs/the-internet` | `https://the-internet.herokuapp.com` | Selenium login healing, iframe shortcoming, Shadow DOM shortcoming, Playwright manual SDK |
+| `saucelabs/the-internet` | `https://the-internet.herokuapp.com` | Selenium login healing, Playwright auto-activation, Playwright manual SDK, iframe shortcoming, Shadow DOM shortcoming |
 
 Latest verified public-suite result:
 
 ```text
-5 passed
+6 passed
 ```
 
 ## Design Principles
@@ -514,7 +568,7 @@ Latest verified public-suite result:
 
 ## Current Status
 
-AegisAI is an alpha package with a working Selenium L0-L5 cascade, Selenium helper functions, opt-in Selenium auto-activation, local Security Officer governance, optional LLM configuration, deterministic SDK healing, and explicit Playwright hooks/manual SDK support.
+AegisAI is an alpha package with a working Selenium L0-L5 cascade, Selenium helper functions, opt-in Selenium auto-activation, sync Playwright helper functions, opt-in sync Playwright auto-activation for common locator actions, local Security Officer governance, optional LLM configuration, deterministic SDK healing, and explicit Playwright hooks.
 
-The most mature path today is Selenium. Playwright can use the core SDK and hooks, while full automatic Playwright L0-L5 behavior should be treated as future work.
+The most mature path today is still Selenium because it has the deepest live-browser cascade and script persistence support. Playwright is now usable for common sync `page.locator(...).fill()/click()` workflows, while Playwright L5, async Playwright, iframe auto-switching, and Shadow DOM piercing should be treated as future work.
 

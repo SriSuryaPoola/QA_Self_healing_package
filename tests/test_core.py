@@ -527,6 +527,119 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(driver.find_element("xpath", "//missing"), "healed")
         self.assertEqual(driver.original_calls, 2)
 
+    def test_playwright_activate_aegis_auto_heals_fill_and_restores(self) -> None:
+        from aegisai.playwright import activate_aegis, deactivate_aegis
+
+        class _Locator:
+            def __init__(self, page, selector):
+                self.page = page
+                self.selector = selector
+
+            def count(self):
+                return 1 if self.selector == "#username" else 0
+
+            def fill(self, value, **kwargs):
+                if self.selector != "#username":
+                    raise RuntimeError("missing")
+                self.page.values[self.selector] = value
+
+        class _Page:
+            def __init__(self):
+                self.values = {}
+
+            def locator(self, selector, *args, **kwargs):
+                return _Locator(self, selector)
+
+            def content(self):
+                return '<input id="username" type="text">'
+
+            def wait_for_load_state(self, state, timeout=None):
+                return None
+
+        page = _Page()
+        patch = activate_aegis(page)
+
+        page.locator("xpath=//input[@id='user-name-field']").fill("tomsmith")
+
+        self.assertEqual(page.values["#username"], "tomsmith")
+        self.assertEqual(patch.last_outcome.layer_used, 2)
+        self.assertEqual(patch.last_outcome.healed_selector, "#username")
+
+        deactivate_aegis(page)
+        with self.assertRaises(RuntimeError):
+            page.locator("xpath=//input[@id='user-name-field']").fill("tomsmith")
+        self.assertFalse(patch.active)
+
+    def test_playwright_activate_aegis_auto_heals_click_with_translation(self) -> None:
+        from aegisai.playwright import activate_aegis
+
+        class _Locator:
+            def __init__(self, page, selector):
+                self.page = page
+                self.selector = selector
+
+            def count(self):
+                return 1 if self.selector == "button[type='submit']" else 0
+
+            def click(self, **kwargs):
+                if self.selector != "button[type='submit']":
+                    raise RuntimeError("missing")
+                self.page.clicked = self.selector
+
+        class _Page:
+            clicked = None
+
+            def locator(self, selector, *args, **kwargs):
+                return _Locator(self, selector)
+
+            def content(self):
+                return '<button type="submit">Login</button>'
+
+            def wait_for_load_state(self, state, timeout=None):
+                return None
+
+        page = _Page()
+        patch = activate_aegis(page)
+
+        page.locator("xpath=//button[@data-testid='login-submit']").click()
+
+        self.assertEqual(page.clicked, "button[type='submit']")
+        self.assertEqual(patch.last_outcome.layer_used, 1)
+        self.assertEqual(patch.last_outcome.healed_selector, "button[type='submit']")
+
+    def test_playwright_heal_fill_helper_uses_auto_activation(self) -> None:
+        from aegisai.playwright import heal_fill
+
+        class _Locator:
+            def __init__(self, page, selector):
+                self.page = page
+                self.selector = selector
+
+            def count(self):
+                return 1 if self.selector == "#password" else 0
+
+            def fill(self, value, **kwargs):
+                if self.selector != "#password":
+                    raise RuntimeError("missing")
+                self.page.values[self.selector] = value
+
+        class _Page:
+            def __init__(self):
+                self.values = {}
+
+            def locator(self, selector, *args, **kwargs):
+                return _Locator(self, selector)
+
+            def content(self):
+                return '<input id="password" type="password">'
+
+            def wait_for_load_state(self, state, timeout=None):
+                return None
+
+        page = _Page()
+        heal_fill(page, "xpath=//input[@id='pass-field']", "secret")
+        self.assertEqual(page.values["#password"], "secret")
+
 
 if __name__ == "__main__":
     unittest.main()

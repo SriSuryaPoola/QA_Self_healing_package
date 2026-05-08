@@ -42,8 +42,39 @@ def test_playwright_manual_sdk_heals_public_login_dom(page):
     assert page.locator(result.locator).input_value() == "SuperSecretPassword!"
 
 
-def test_playwright_hooks_capture_failure_but_do_not_auto_heal(page):
-    """Known gap: Playwright hooks capture context but do not auto-patch locator actions yet."""
+def test_playwright_auto_activation_heals_public_login_form(page):
+    """Playwright auto-activation should heal failed fill/click actions."""
+
+    from aegisai.playwright import activate_aegis
+
+    page.goto(f"{THE_INTERNET_BASE_URL}/login")
+    patch = activate_aegis(page)
+
+    page.locator("xpath=//input[@id='user-name-field']").fill("tomsmith", timeout=1000)
+    username_outcome = patch.last_outcome
+    assert username_outcome is not None
+    assert username_outcome.success
+    assert username_outcome.layer_used == 2
+    assert username_outcome.healed_selector == "#username"
+
+    page.locator("xpath=//input[@id='pass-field']").fill("SuperSecretPassword!", timeout=1000)
+    password_outcome = patch.last_outcome
+    assert password_outcome is not None
+    assert password_outcome.success
+    assert password_outcome.layer_used == 2
+    assert password_outcome.healed_selector == "#password"
+
+    page.locator("xpath=//button[@data-testid='login-submit']").click(timeout=1000)
+    button_outcome = patch.last_outcome
+    assert button_outcome is not None
+    assert button_outcome.success
+    assert button_outcome.layer_used == 1
+    assert button_outcome.healed_selector == "button[type='submit']"
+    assert "/secure" in page.url
+
+
+def test_playwright_hooks_capture_failure_context_for_diagnostics(page):
+    """Explicit Playwright hooks still capture action/failure context."""
 
     from aegisai.interceptor.playwright_listener import AegisPlaywrightHooks
     from playwright.sync_api import Error as PlaywrightError
@@ -62,4 +93,3 @@ def test_playwright_hooks_capture_failure_but_do_not_auto_heal(page):
     assert hooks.last_failure is not None
     assert hooks.last_failure.locator == "//input[@id='user-name-field']"
     assert hooks.last_actions[-1]["action"] == "fill"
-
