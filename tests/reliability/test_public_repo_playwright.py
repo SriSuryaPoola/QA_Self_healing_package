@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
 THE_INTERNET_BASE_URL = os.getenv("AEGISAI_THE_INTERNET_URL", "https://the-internet.herokuapp.com")
+WEBDOMO_INDEX = Path(
+    os.getenv(
+        "AEGISAI_WEBDOMO_INDEX",
+        Path(__file__).resolve().parents[4]
+        / "public repos"
+        / "repos"
+        / "robotframework-webdemo"
+        / "demoapp"
+        / "html"
+        / "index.html",
+    )
+)
 
 
 @pytest.fixture()
@@ -77,6 +90,37 @@ def test_playwright_auto_activation_heals_public_login_form(page):
     assert button_outcome.layer_used == 1
     assert button_outcome.healed_selector == "button[type='submit']"
     assert "/secure" in page.url
+
+
+def test_playwright_auto_activation_heals_robotframework_webdemo_login_form(page):
+    """Local clone of robotframework/WebDemo through the sync Playwright adapter."""
+
+    from aegisai.playwright import activate_aegis
+
+    if not WEBDOMO_INDEX.exists():
+        pytest.skip(f"robotframework/WebDemo clone not found at {WEBDOMO_INDEX}")
+
+    page.goto(WEBDOMO_INDEX.as_uri())
+    patch = activate_aegis(page)
+
+    page.locator("xpath=//input[@id='user-name-field']").fill("demo", timeout=1000)
+    username_outcome = patch.last_outcome
+    assert username_outcome is not None
+    assert username_outcome.success
+    assert username_outcome.healed_selector == "#username_field"
+
+    page.locator("xpath=//input[@id='pass-field']").fill("mode", timeout=1000)
+    password_outcome = patch.last_outcome
+    assert password_outcome is not None
+    assert password_outcome.success
+    assert password_outcome.healed_selector == "#password_field"
+
+    page.locator("xpath=//button[@id='login-submit']").click(timeout=1000)
+    button_outcome = patch.last_outcome
+    assert button_outcome is not None
+    assert button_outcome.success
+    assert button_outcome.healed_selector == "input[type='submit']"
+    assert "welcome.html" in page.url
 
 
 def test_playwright_hooks_capture_failure_context_for_diagnostics(page):

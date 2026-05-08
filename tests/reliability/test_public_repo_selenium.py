@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
 THE_INTERNET_BASE_URL = os.getenv("AEGISAI_THE_INTERNET_URL", "https://the-internet.herokuapp.com")
 SAUCEDEMO_BASE_URL = os.getenv("AEGISAI_SAUCEDEMO_URL", "https://www.saucedemo.com")
+WEBDOMO_INDEX = Path(
+    os.getenv(
+        "AEGISAI_WEBDOMO_INDEX",
+        Path(__file__).resolve().parents[4]
+        / "public repos"
+        / "repos"
+        / "robotframework-webdemo"
+        / "demoapp"
+        / "html"
+        / "index.html",
+    )
+)
 
 
 @pytest.fixture()
@@ -119,6 +132,35 @@ def test_selenium_heals_saucedemo_login_form(driver):
     assert password_outcome.success
     assert button_outcome.success
     assert "inventory" in driver.current_url
+
+
+def test_selenium_heals_robotframework_webdemo_login_form(driver):
+    """Local clone of robotframework/WebDemo: classic SeleniumLibrary login page."""
+
+    from selenium.webdriver.common.by import By
+
+    if not WEBDOMO_INDEX.exists():
+        pytest.skip(f"robotframework/WebDemo clone not found at {WEBDOMO_INDEX}")
+
+    driver.get(WEBDOMO_INDEX.as_uri())
+    patch = _activate(driver)
+
+    username = driver.find_element(By.XPATH, "//input[@id='user-name-field']")
+    username_outcome = _assert_healed(patch, "username_field")
+    username.send_keys("demo")
+
+    password = driver.find_element(By.XPATH, "//input[@id='pass-field']")
+    password_outcome = _assert_healed(patch, "password_field")
+    password.send_keys("mode")
+
+    button = driver.find_element(By.XPATH, "//button[@id='login-submit']")
+    button_outcome = _assert_healed(patch, "submit")
+    button.click()
+
+    assert username_outcome.success
+    assert password_outcome.success
+    assert button_outcome.success
+    assert "welcome.html" in driver.current_url
 
 
 def test_selenium_heals_element_inside_iframe(driver):
