@@ -965,6 +965,23 @@ class PolicyAndPersistenceTests(unittest.TestCase):
 
             self.assertEqual(len(list(Path(tmp).glob("*.json"))), 1)
 
+    def test_security_audit_deduplicates_repeated_decisions(self) -> None:
+        from aegisai.models import DomElement
+        from aegisai.security import SecurityOfficer, SecurityPolicy
+
+        with TemporaryDirectory() as tmp:
+            officer = SecurityOfficer(SecurityPolicy(audit_dir=tmp))
+            for _ in range(2):
+                officer.review_candidate(
+                    old_locator="//input[@id='pass-field']",
+                    new_locator='input[type="password"]',
+                    element=DomElement(tag="input", attrs={"type": "password", "name": "password"}),
+                    source="test",
+                    confidence=0.91,
+                )
+
+            self.assertEqual(len(list(Path(tmp).glob("*.json"))), 1)
+
     def test_heal_suggestions_file_contains_diff(self) -> None:
         from aegisai.persistence.suggestions import append_heal_suggestion, create_source_suggestion
 

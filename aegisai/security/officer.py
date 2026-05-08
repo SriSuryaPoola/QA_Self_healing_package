@@ -7,6 +7,7 @@ and persistence are allowed.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from aegisai.models import DomElement
@@ -19,6 +20,7 @@ from .redactor import redact_dom_element, redact_payload
 class SecurityOfficer:
     def __init__(self, policy: SecurityPolicy | None = None) -> None:
         self.policy = policy or SecurityPolicy()
+        self._audit_keys: set[str] = set()
 
     def review_candidate(
         self,
@@ -46,23 +48,22 @@ class SecurityOfficer:
             reason=threshold_reason or self._reason(risk, runtime_allowed, persistence_allowed),
             sanitized=True,
         )
-        if self._should_audit(decision):
-            self.audit(
-                {
-                    "event": "candidate_review",
-                    "old_locator": old_locator,
-                    "new_locator": new_locator,
-                    "source": source,
-                    "confidence": confidence,
-                    "element": redact_dom_element(element),
-                    "risk_level": risk.value,
-                    "runtime_allowed": runtime_allowed,
-                    "llm_allowed": llm_allowed,
-                    "persistence_allowed": persistence_allowed,
-                    "review_required": review_required,
-                    "reason": decision.reason,
-                }
-            )
+        event = {
+            "event": "candidate_review",
+            "old_locator": old_locator,
+            "new_locator": new_locator,
+            "source": source,
+            "confidence": confidence,
+            "element": redact_dom_element(element),
+            "risk_level": risk.value,
+            "runtime_allowed": runtime_allowed,
+            "llm_allowed": llm_allowed,
+            "persistence_allowed": persistence_allowed,
+            "review_required": review_required,
+            "reason": decision.reason,
+        }
+        if self._should_audit(decision) and self._remember_audit_event(event):
+            self.audit(event)
         return decision
 
     def build_llm_payload(
@@ -127,6 +128,15 @@ class SecurityOfficer:
         if not decision.runtime_allowed or not decision.persistence_allowed:
             return True
         return self.policy.audit_low_risk
+
+    def _remember_audit_event(self, event: dict[str, Any]) -> bool:
+        if not self.policy.audit_deduplicate:
+            return True
+        key = json.dumps(event, sort_keys=True, default=str)
+        if key in self._audit_keys:
+            return False
+        self._audit_keys.add(key)
+        return True
 
     def _runtime_allowed(self, risk: RiskLevel) -> bool:
         if risk == RiskLevel.CRITICAL:
