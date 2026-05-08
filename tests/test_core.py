@@ -843,12 +843,26 @@ class ReportingCacheDryRunTests(unittest.TestCase):
                 source="deterministic",
                 layer_label="L2:deterministic",
                 confidence=0.93,
+                duration_ms=12.5,
+            )
+            report.record_attempt(
+                original_locator="#missing",
+                healed_locator=None,
+                success=False,
+                source="guardrail",
+                layer_label="guardrail",
+                confidence=0.0,
+                duration_ms=2.5,
             )
             target = report.write_json(Path(tmp) / "report.json")
             payload = target.read_text(encoding="utf-8")
 
         self.assertIn('"success": 1', payload)
         self.assertIn('"L2:deterministic": 1', payload)
+        self.assertIn('"success_rate": 0.5', payload)
+        self.assertIn('"avg_confidence": 0.465', payload)
+        self.assertIn('"avg_duration_ms": 7.5', payload)
+        self.assertIn('"p95_duration_ms": 12.0', payload)
 
     def test_sdk_report_recording_is_opt_in(self) -> None:
         from aegisai.reporting import reset_session_report

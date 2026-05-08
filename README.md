@@ -65,6 +65,7 @@ Most self-healing approaches either retry blindly or jump straight to AI. AegisA
 | pytest/unittest helpers | Available without replacing the existing runner |
 | DOM drift detection | Available for pre-failure locator drift checks |
 | Common QA locator anchors | Supports `data-testid`, `data-test`, `data-cy`, `data-qa`, `data-test-id`, and Angular `formControlName` |
+| Confidence and run metrics | Available in JSON reports, audit output, CLI summaries, and Security Officer decisions |
 
 ## Healing Pipeline
 
@@ -159,6 +160,53 @@ Approximate demo script durations observed locally:
 | `Login_AutoActivation_L0_L5_Test.py` | About 22 seconds | Auto-activation run: L1-L4 healed, L0 failed safely, L5 reported missing key |
 
 In normal execution, a single failed locator that reaches only L0-L4 is usually handled in about 3-5 seconds. If L5 is enabled and needed, expect about 6-15 seconds total for that failed locator.
+
+## Confidence Scores and Metrics
+
+AegisAI does not treat every healed locator as equally safe. Each candidate carries a confidence score from `0.0` to `1.0`, and that score is combined with Security Officer risk before runtime retry or persistence is allowed.
+
+Confidence is built from:
+
+- Attribute match: how strongly the old locator intent matches the new DOM element.
+- DOM proximity: whether the candidate appears in a plausible structural location.
+- Historical success: whether a similar heal has already worked safely.
+- LLM confidence: used only for L5 suggestions and still validated locally.
+
+Default routing:
+
+| Confidence | Route | Meaning |
+|---:|---|---|
+| `>= 0.90` | `auto_pr` | Strong candidate; low-risk persistence can be automated by policy. |
+| `0.80 - 0.89` | `confirm_across_runs` | Runtime healing can work, but persistence should wait for repeated confirmation or review. |
+| `< 0.80` | `block` | Candidate is too weak; AegisAI should fail safely instead of guessing. |
+
+Runtime reports include the data a QA lead usually wants during rollout:
+
+| Metric | Why It Matters |
+|---|---|
+| `success_rate` | Shows whether healing is improving stability or hiding failures. |
+| `avg_confidence` | Helps identify weak locator patterns in the suite. |
+| `avg_duration_ms` and `p95_duration_ms` | Shows the real performance cost of healing. |
+| `layer_metrics` | Separates fast deterministic wins from expensive fallback behavior. |
+| `risk_level` and `persistence_decision` | Shows whether the Security Officer allowed runtime healing, source persistence, or review-only output. |
+
+Example report summary:
+
+```json
+{
+  "total": 3,
+  "success": 2,
+  "failure": 1,
+  "success_rate": 0.6667,
+  "avg_confidence": 0.74,
+  "avg_duration_ms": 18.4,
+  "p95_duration_ms": 31.2,
+  "layers": {
+    "L2:deterministic": 2,
+    "guardrail": 1
+  }
+}
+```
 
 ## Security Officer
 

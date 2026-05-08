@@ -88,11 +88,46 @@ class HealingReport:
     def failure_count(self) -> int:
         return sum(1 for event in self.events if not event.success)
 
+    @property
+    def success_rate(self) -> float:
+        return _rate(self.success_count, len(self.events))
+
+    @property
+    def average_confidence(self) -> float:
+        return _average(event.confidence for event in self.events)
+
+    @property
+    def average_duration_ms(self) -> float:
+        return _average(event.duration_ms for event in self.events)
+
+    @property
+    def p95_duration_ms(self) -> float:
+        return _percentile([event.duration_ms for event in self.events], 95)
+
     def layer_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
         for event in self.events:
             counts[event.layer_label] = counts.get(event.layer_label, 0) + 1
         return counts
+
+    def layer_metrics(self) -> dict[str, dict[str, float | int]]:
+        grouped: dict[str, list[HealingEvent]] = {}
+        for event in self.events:
+            grouped.setdefault(event.layer_label, []).append(event)
+
+        metrics: dict[str, dict[str, float | int]] = {}
+        for layer, events in sorted(grouped.items()):
+            successes = sum(1 for event in events if event.success)
+            metrics[layer] = {
+                "total": len(events),
+                "success": successes,
+                "failure": len(events) - successes,
+                "success_rate": _rate(successes, len(events)),
+                "avg_confidence": _average(event.confidence for event in events),
+                "avg_duration_ms": _average(event.duration_ms for event in events),
+                "p95_duration_ms": _percentile([event.duration_ms for event in events], 95),
+            }
+        return metrics
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -103,7 +138,12 @@ class HealingReport:
                 "total": len(self.events),
                 "success": self.success_count,
                 "failure": self.failure_count,
+                "success_rate": self.success_rate,
+                "avg_confidence": self.average_confidence,
+                "avg_duration_ms": self.average_duration_ms,
+                "p95_duration_ms": self.p95_duration_ms,
                 "layers": self.layer_counts(),
+                "layer_metrics": self.layer_metrics(),
             },
             "events": [event.to_dict() for event in self.events],
         }
@@ -142,5 +182,38 @@ def summarize_report(report: HealingReport | dict[str, Any]) -> dict[str, Any]:
         "total": summary.get("total", 0),
         "success": summary.get("success", 0),
         "failure": summary.get("failure", 0),
+        "success_rate": summary.get("success_rate", 0.0),
+        "avg_confidence": summary.get("avg_confidence", 0.0),
+        "avg_duration_ms": summary.get("avg_duration_ms", 0.0),
+        "p95_duration_ms": summary.get("p95_duration_ms", 0.0),
         "layers": summary.get("layers", {}),
+        "layer_metrics": summary.get("layer_metrics", {}),
     }
+
+
+def _average(values: Any) -> float:
+    numeric = [float(value) for value in values]
+    if not numeric:
+        return 0.0
+    return round(sum(numeric) / len(numeric), 4)
+
+
+def _percentile(values: list[float], percentile: int) -> float:
+    numeric = sorted(float(value) for value in values)
+    if not numeric:
+        return 0.0
+    if len(numeric) == 1:
+        return round(numeric[0], 4)
+
+    position = (len(numeric) - 1) * (percentile / 100)
+    lower = int(position)
+    upper = min(lower + 1, len(numeric) - 1)
+    weight = position - lower
+    value = numeric[lower] * (1 - weight) + numeric[upper] * weight
+    return round(value, 4)
+
+
+def _rate(part: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round(part / total, 4)
