@@ -19,6 +19,60 @@ logger = logging.getLogger(__name__)
 # JS probing script — runs entirely in the browser, returns the first match
 _PROBE_SCRIPT = """
 return (function(strategies) {
+    function collectDeep(root, acc) {
+        if (!root) {
+            return acc;
+        }
+        var children = [];
+        try {
+            children = root.querySelectorAll ? root.querySelectorAll('*') : [];
+        } catch(e) {
+            children = [];
+        }
+        for (var i = 0; i < children.length; i++) {
+            var el = children[i];
+            acc.push(el);
+            if (el.shadowRoot) {
+                collectDeep(el.shadowRoot, acc);
+            }
+        }
+        return acc;
+    }
+    function queryDeep(selector) {
+        try {
+            var direct = document.querySelector(selector);
+            if (direct) {
+                return direct;
+            }
+        } catch(e) {}
+        var all = collectDeep(document, []);
+        var fallback = '';
+        try {
+            var parts = selector.trim().split(/\\s+/);
+            fallback = parts.length > 1 ? parts[parts.length - 1] : '';
+        } catch(e) {}
+        for (var i = 0; i < all.length; i++) {
+            try {
+                if (all[i].matches && all[i].matches(selector)) {
+                    return all[i];
+                }
+                if (fallback && all[i].matches && all[i].matches(fallback)) {
+                    return all[i];
+                }
+            } catch(e) {}
+        }
+        return null;
+    }
+    function allDeep(tag) {
+        var all = collectDeep(document, []);
+        if (!tag || tag === '*') {
+            return all;
+        }
+        var lowered = tag.toLowerCase();
+        return all.filter(function(el) {
+            return (el.tagName || '').toLowerCase() === lowered;
+        });
+    }
     function isVisible(el) {
         if (!el) {
             return false;
@@ -36,13 +90,13 @@ return (function(strategies) {
         try {
             var el = null;
             if (s.type === 'css') {
-                el = document.querySelector(s.selector);
+                el = queryDeep(s.selector);
             } else if (s.type === 'xpath') {
                 var r = document.evaluate(s.selector, document, null,
                     XPathResult.FIRST_ORDERED_NODE_TYPE, null);
                 el = r.singleNodeValue;
             } else if (s.type === 'text') {
-                var all = document.querySelectorAll(s.tag || '*');
+                var all = allDeep(s.tag || '*');
                 for (var j = 0; j < all.length; j++) {
                     if (all[j].textContent.trim().toLowerCase()
                             .includes(s.selector.toLowerCase())) {
@@ -55,6 +109,7 @@ return (function(strategies) {
                 // Element is visible
                 return {
                     found: true,
+                    element: el,
                     strategy_index: i,
                     strategy_label: s.label,
                     tag: el.tagName.toLowerCase(),
@@ -80,6 +135,7 @@ class JsProbeResult:
     css_locator: str | None = None   # best CSS selector to use with Selenium
     strategy_label: str = ""
     element_info: dict = None
+    element: Any | None = None
 
     def __post_init__(self):
         if self.element_info is None:
@@ -94,6 +150,9 @@ def _build_strategies(failing_locator: str) -> list[dict]:
     raw_lower = raw.lower()
     if any(marker in raw_lower for marker in ("token", "csrf", "session", "cookie", "authorization")):
         return strategies
+
+    if not raw.strip().startswith("//"):
+        strategies.append({"type": "css", "selector": raw, "label": "original_css_deep"})
 
     # Direct translations
     m = re.match(r"//(\w+)\[@([\w-]+)=['\"]([^'\"]+)['\"]\]", raw)
@@ -178,6 +237,7 @@ def probe(failing_locator: str, driver: Any) -> JsProbeResult:
             css_locator=css,
             strategy_label=raw_result.get("strategy_label", ""),
             element_info=raw_result,
+            element=raw_result.get("element"),
         )
     except Exception as exc:
         logger.debug("[aegisai][js_prober] JS probe error: %s", exc)

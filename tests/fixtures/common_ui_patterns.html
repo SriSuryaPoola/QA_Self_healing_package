@@ -1,0 +1,25 @@
+<main>
+  <form>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="email">
+
+    <label for="country">Country</label>
+    <select id="country" name="country">
+      <option>India</option>
+      <option>United States</option>
+    </select>
+
+    <button data-testid="login-button">Login</button>
+    <button data-testid="disabled-login" disabled>Login</button>
+    <button data-testid="hidden-login" aria-hidden="true">Login</button>
+  </form>
+
+  <table>
+    <tr>
+      <td data-testid="order-id">A-100</td>
+      <td data-testid="order-status">Ready</td>
+    </tr>
+  </table>
+
+  <a href="/forgot-password">Forgot password?</a>
+</main>

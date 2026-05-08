@@ -50,11 +50,20 @@ Most self-healing approaches either retry blindly or jump straight to AI. AegisA
 | Playwright core SDK healing | Available manually via `page.content()` |
 | Playwright helper functions | Available through `heal_fill`, `heal_click`, `heal_selector` |
 | Playwright opt-in auto-activation | Available for sync `page.locator(...).fill()/click()` style actions |
+| Playwright async helpers | Available through `aegisai.playwright_async` |
+| Playwright iframe helpers | Available for explicit frame fill/click workflows |
 | Playwright page hooks | Available for explicit failure/action context capture |
 | Playwright full L0-L4 automatic listener | Available for common sync locator actions |
 | Playwright L5 LLM fallback | Planned; use explicit SDK/LLM path for now |
 | LLM provider setup CLI | Available through `aegisai configure llm` |
 | Security Officer governance | Available |
+| Security policy files | Available through JSON, TOML, or simple YAML |
+| Dry-run / audit mode | Available through CLI and Selenium/Playwright helpers |
+| Local healed-locator cache | Available and disableable |
+| JSON healing reports | Available for local debugging and CI artifacts |
+| Review suggestions artifact | Available as `.aegisai/HEAL_SUGGESTIONS.json` |
+| pytest/unittest helpers | Available without replacing the existing runner |
+| DOM drift detection | Available for pre-failure locator drift checks |
 
 ## Healing Pipeline
 
@@ -106,7 +115,7 @@ These results were observed on the local demo suite in this repository on May 7,
 
 | Check | Result |
 |---|---|
-| Unit regression suite | 33 tests passed |
+| Unit regression suite | 77 tests passed |
 | Python compile check | Passed |
 | L0 Selenium demo | Failed safely because modal was closed; no LLM call |
 | L1 Selenium demo | Passed, broken button text healed |
@@ -236,6 +245,8 @@ For Playwright, install browser binaries after installing the Python dependency:
 ```powershell
 python -m playwright install chromium
 ```
+
+The `examples/` folder includes quickstarts for Selenium, Playwright sync, Playwright async, pytest, unittest/Page Object Model, Behave, Robot Framework, Security Officer policies, CI/CD usage, and notebook-style SDK exploration.
 
 ## Optional LLM Configuration
 
@@ -569,7 +580,118 @@ hooks.wrap_action(
 )
 ```
 
-Playwright support is still intentionally honest: common sync locator actions now auto-heal through L0-L4, while Playwright L5/LLM fallback, async Playwright patching, iframe auto-switching, and Shadow DOM piercing remain future hardening areas.
+Playwright support is still intentionally honest: common sync and async locator actions now auto-heal through local deterministic paths, while Playwright L5/LLM fallback and full automatic traversal for complex iframe/Shadow DOM cases remain future hardening areas.
+
+### Async Playwright
+
+Async Playwright users can use the async helper module:
+
+```python
+from aegisai.playwright_async import activate_aegis_async
+
+activate_aegis_async(page)
+
+await page.locator("xpath=//input[@id='email-field']").fill("qa@example.com")
+await page.locator("xpath=//button[@data-id='submit-btn']").click()
+```
+
+Or use explicit helpers:
+
+```python
+from aegisai.playwright_async import async_heal_click, async_heal_fill
+
+await async_heal_fill(page, "xpath=//input[@id='email-field']", "qa@example.com")
+await async_heal_click(page, "xpath=//button[@data-id='submit-btn']")
+```
+
+### Dry Run / Audit Mode
+
+Dry-run mode analyzes a broken locator without clicking, typing, patching source, or changing browser state.
+
+```python
+from aegisai.selenium import dry_run_find
+
+result = dry_run_find(driver, "xpath", "//input[@id='email-field']")
+print(result.to_dict())
+```
+
+For Playwright:
+
+```python
+from aegisai.playwright import dry_run_selector
+
+result = dry_run_selector(page, "xpath=//input[@id='email-field']")
+```
+
+### Reports, Cache, and Suggestions
+
+AegisAI keeps package-local runtime artifacts under `.aegisai/` by default. This folder is intended for local debugging or CI artifacts and should not contain secrets.
+
+| Artifact | Purpose |
+|---|---|
+| `.aegisai/cache/locator-cache.json` | Reuses successful heals for the same DOM fingerprint so repeated local heals are faster. |
+| `.aegisai/audit/*.json` | Security Officer decisions with sensitive values redacted. |
+| `.aegisai/HEAL_SUGGESTIONS.json` | Review-required source-fix suggestions, including optional unified diffs. |
+| `.aegisai/reports/latest.json` | Optional session-level healing report for CI/debugging. |
+| `.aegisai/artifacts/*` | Optional redacted DOM debug artifacts and opt-in screenshots. |
+
+Disable cache for a single SDK call:
+
+```python
+result = app.heal_locator("#old", page.content(), use_cache=False)
+```
+
+Or disable cache for a process:
+
+```powershell
+$env:AEGISAI_CACHE_DISABLED="1"
+```
+
+Use a team-shared cache file without any platform service:
+
+```powershell
+$env:AEGISAI_CACHE_PATH=".aegisai/team-locator-cache.json"
+```
+
+Capture redacted debug artifacts for a failed case:
+
+```python
+from aegisai import capture_debug_artifacts
+
+paths = capture_debug_artifacts(driver, include_screenshot=False)
+```
+
+Detect DOM drift before a failure happens:
+
+```python
+from aegisai import detect_dom_drift
+
+drift = detect_dom_drift(previous_dom, current_dom)
+print(drift.added_locators, drift.removed_locators)
+```
+
+### Security Policy Files
+
+Teams can tune risk behavior without changing test code.
+
+```toml
+[security]
+name = "enterprise-balanced"
+allow_runtime_for_medium = true
+allow_runtime_for_high = false
+auto_persist_low = true
+min_confidence_medium = 0.88
+audit_enabled = true
+```
+
+Use the policy from code:
+
+```python
+from aegisai import AegisAI, load_security_policy
+
+policy = load_security_policy("examples/security_policy.toml")
+app = AegisAI(security_policy=policy)
+```
 
 ## CLI Smoke Checks
 
@@ -577,6 +699,31 @@ Run deterministic healing against an HTML fixture:
 
 ```powershell
 python -m aegisai heal --locator "#login" --dom-file examples/login.html --expected-role button
+```
+
+Write a JSON report while healing a fixture:
+
+```powershell
+python -m aegisai heal --locator "#login" --dom-file examples/login.html --expected-role button --report-file .aegisai/reports/latest.json
+```
+
+Run audit-only dry-run mode:
+
+```powershell
+python -m aegisai audit --locator "#login" --dom-file examples/login.html --expected-role button
+```
+
+Summarize a report:
+
+```powershell
+python -m aegisai report --input .aegisai/reports/latest.json
+```
+
+Inspect or clear the local locator cache:
+
+```powershell
+python -m aegisai cache
+python -m aegisai cache --clear
 ```
 
 Check state-poisoning status:
@@ -607,13 +754,71 @@ Current public targets:
 
 | Public repo | Runtime target | Coverage |
 |---|---|---|
-| `saucelabs/the-internet` | `https://the-internet.herokuapp.com` | Selenium login healing, Playwright auto-activation, Playwright manual SDK, iframe shortcoming, Shadow DOM shortcoming |
+| `saucelabs/the-internet` | `https://the-internet.herokuapp.com` | Selenium login healing, Selenium iframe discovery, Selenium L4 Shadow DOM probing, Playwright auto-activation, Playwright manual SDK |
+| SauceDemo public app | `https://www.saucedemo.com` | Selenium login-form locator drift against a second public UI |
 
 Latest verified public-suite result:
 
 ```text
-6 passed
+7 passed
 ```
+
+## Benchmark Methodology
+
+The benchmark numbers in this README are intentionally practical rather than synthetic. They include real browser startup, page load, waiting, broken locator failure, healing, retry, and teardown time. For package-level speed checks, use the unit suite and the local public reliability suite together:
+
+```powershell
+python -m pytest tests/test_core.py -q
+$env:AEGISAI_RUN_PUBLIC_REPO_TESTS="1"; python -m pytest tests/reliability -q
+```
+
+When comparing layers, remember that Selenium demo scripts intentionally include browser/network overhead. The local L0-L4 healing code itself is much faster than the full script duration.
+
+## Architecture
+
+```text
+Existing Test Runner
+  -> Selenium / Playwright Adapter
+  -> Failure Detection
+  -> Local Cache
+  -> L0-L4 Deterministic Healing
+  -> Optional L5 LLM Fallback
+  -> Security Officer
+  -> Guardrails
+  -> Runtime Retry
+  -> Report / Audit / Optional Suggestion Artifact
+```
+
+The important architectural decision is that AegisAI is a package, not a platform. Reports, cache, policies, and suggestions are local files that teams can commit, ignore, upload as CI artifacts, or replace with their own workflow.
+
+## Known Limitations
+
+- L5 requires explicit provider configuration and is skipped professionally when no valid key is available.
+- Selenium has the deepest live-browser cascade and source persistence path today.
+- Playwright supports common sync and async locator actions, but full L5 parity is still planned.
+- Simple Selenium iframe discovery and L4 Shadow DOM probing are supported; complex nested frame/web-component flows still need more hardening.
+- AegisAI fixes broken locators; it does not guess business intent when a test intentionally uses the wrong credentials or wrong expected behavior.
+
+## FAQ
+
+**Do I need to rewrite my framework?** No. AegisAI is designed to activate beside Selenium, Playwright, pytest, unittest, Behave, or Robot Framework.
+
+**Will it send passwords to an LLM?** No. Password values are not captured by the DOM parser, and LLM context is sanitized by the Security Officer.
+
+**Can I use it without LLM keys?** Yes. L0-L4 run locally without an LLM key.
+
+**Can I stop it from changing source files?** Yes. Use helper/SDK/dry-run modes, pass `backup=True`, or use Security Officer policy controls. Medium/high-risk persistence is review-first by design.
+
+## Troubleshooting
+
+| Symptom | What To Check |
+|---|---|
+| `AegisAI could not detect Selenium or Playwright` | Call `activate_aegis(driver)` or `activate_aegis(page)` after the browser object is created. |
+| L5 says no key is configured | Run `python -m aegisai configure llm --status` or disable L5 until a valid key is available. |
+| A password field heals but source is not patched | This is expected. Password remaps are medium risk and require review before persistence. |
+| Cache seems stale | Clear it with `python -m aegisai cache --clear` or set `AEGISAI_CACHE_DISABLED=1`. |
+| A high-risk click is blocked | Review or loosen the local Security Officer policy only if the flow is safe for your environment. |
+| Complex iframe/Shadow DOM case fails | Use explicit helper mode first; full automatic traversal for deeply nested cases is still a hardening area. |
 
 ## Design Principles
 
@@ -627,7 +832,19 @@ Latest verified public-suite result:
 
 ## Current Status
 
-AegisAI is an alpha package with a working Selenium L0-L5 cascade, Selenium helper functions, opt-in Selenium auto-activation, sync Playwright helper functions, opt-in sync Playwright auto-activation for common locator actions, local Security Officer governance, optional LLM configuration, deterministic SDK healing, and explicit Playwright hooks.
+AegisAI is an alpha package with a working Selenium L0-L5 cascade, Selenium helper functions, opt-in Selenium auto-activation, sync and async Playwright helpers, opt-in sync/async Playwright auto-activation for common locator actions, local Security Officer governance, optional LLM configuration, deterministic SDK healing, explicit Playwright hooks, dry-run/audit mode, local cache, JSON reports, and review-required source suggestions.
 
-The most mature path today is still Selenium because it has the deepest live-browser cascade and script persistence support. Playwright is now usable for common sync `page.locator(...).fill()/click()` workflows, while Playwright L5, async Playwright, iframe auto-switching, and Shadow DOM piercing should be treated as future work.
+The most mature path today is still Selenium because it has the deepest live-browser cascade, simple iframe discovery, L4 Shadow DOM probing, and script persistence support. Playwright is now usable for common sync and async `page.locator(...).fill()/click()` workflows. Playwright L5 and deeply nested iframe/web-component traversal should still be treated as future hardening areas.
+
+## Public API Stability
+
+The intended stable imports are:
+
+- `from aegisai import AegisAI, activate_aegis, deactivate_aegis`
+- `from aegisai.selenium import heal_find, heal_click, heal_send_keys, dry_run_find`
+- `from aegisai.playwright import heal_fill, heal_click, heal_selector, dry_run_selector`
+- `from aegisai.playwright_async import activate_aegis_async, async_heal_fill, async_heal_click`
+- `from aegisai.security import SecurityPolicy, load_security_policy`
+
+Internal modules under `aegisai.engine`, `aegisai.guardrails`, and `aegisai.persistence` may still evolve while the package is alpha.
 

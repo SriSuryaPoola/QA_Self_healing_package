@@ -13,8 +13,14 @@ def page():
     from playwright.sync_api import sync_playwright
 
     headless = os.getenv("AEGISAI_HEADLESS", "1") != "0"
+    browser_name = os.getenv("AEGISAI_BROWSER", "chromium").lower()
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=headless)
+        if browser_name == "chrome":
+            browser_name = "chromium"
+        browser_type = getattr(playwright, browser_name, None)
+        if browser_type is None:
+            pytest.skip(f"Unsupported Playwright browser: {browser_name}")
+        browser = browser_type.launch(headless=headless)
         context = browser.new_context(viewport={"width": 1440, "height": 1000})
         page = context.new_page()
         try:

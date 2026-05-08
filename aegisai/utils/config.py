@@ -29,6 +29,7 @@ class GuardrailConfig:
 @dataclass(frozen=True)
 class PersistenceConfig:
     strategy: str = "hybrid"
+    suggestions_file: str = ".aegisai/HEAL_SUGGESTIONS.json"
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,18 @@ class MemoryConfig:
 
 
 @dataclass(frozen=True)
+class CacheConfig:
+    enabled: bool = True
+    path: str = ".aegisai/cache/locator-cache.json"
+
+
+@dataclass(frozen=True)
+class ReportConfig:
+    enabled: bool = True
+    path: str = ".aegisai/reports/latest.json"
+
+
+@dataclass(frozen=True)
 class AegisConfig:
     mode: str = "safe"
     local_only: bool = False
@@ -46,6 +59,8 @@ class AegisConfig:
     guardrails: GuardrailConfig = field(default_factory=GuardrailConfig)
     persistence: PersistenceConfig = field(default_factory=PersistenceConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    cache: CacheConfig = field(default_factory=CacheConfig)
+    report: ReportConfig = field(default_factory=ReportConfig)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "AegisConfig":
@@ -62,6 +77,8 @@ class AegisConfig:
             guardrails=GuardrailConfig(**data.get("guardrails", {})),
             persistence=PersistenceConfig(**data.get("persistence", {})),
             memory=MemoryConfig(**data.get("memory", {})),
+            cache=CacheConfig(**data.get("cache", {})),
+            report=ReportConfig(**data.get("report", {})),
         )
 
 

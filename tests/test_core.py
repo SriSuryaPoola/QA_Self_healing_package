@@ -106,11 +106,36 @@ class PersistenceTests(unittest.TestCase):
         self.assertTrue(result.changed)
         self.assertIn('"login-button"', result.source)
 
+    def test_static_locator_rewrite_supports_playwright_locator_strings(self) -> None:
+        source = 'page.locator("xpath=//button[@id=\'old-login\']").click()\n'
+        result = rewrite_static_locator(source, "xpath=//button[@id='old-login']", "button[type='submit']")
+        self.assertTrue(result.changed)
+        self.assertIn('"button[type=\'submit\']"', result.source)
+
     def test_pr_decision_requires_confidence_or_confirmation(self) -> None:
         self.assertTrue(should_open_pr(0.91).eligible)
         self.assertFalse(should_open_pr(0.85, confirmations=1).eligible)
         self.assertTrue(should_open_pr(0.85, confirmations=2).eligible)
         self.assertFalse(should_open_pr(0.79, confirmations=3).eligible)
+
+    def test_pr_body_generation_is_review_first(self) -> None:
+        from aegisai.persistence.git_pr import build_pr_body
+
+        body = build_pr_body(
+            [
+                {
+                    "old_locator": "#old",
+                    "new_locator": "#new",
+                    "confidence": 0.91,
+                    "source": "L2:deterministic",
+                    "risk_level": "low",
+                    "review_required": True,
+                }
+            ]
+        )
+
+        self.assertIn("Review every locator change", body)
+        self.assertIn("`#new`", body)
 
 
 class StateTests(unittest.TestCase):
@@ -727,6 +752,481 @@ class RegressionTests(unittest.TestCase):
         page = _Page()
         heal_fill(page, "xpath=//input[@id='pass-field']", "secret")
         self.assertEqual(page.values["#password"], "secret")
+
+    def test_playwright_retryable_actions_include_deeper_locator_parity(self) -> None:
+        from aegisai.playwright import RETRYABLE_ACTIONS
+
+        self.assertIn("get_attribute", RETRYABLE_ACTIONS)
+        self.assertIn("screenshot", RETRYABLE_ACTIONS)
+        self.assertIn("tap", RETRYABLE_ACTIONS)
+
+
+class ReportingCacheDryRunTests(unittest.TestCase):
+    def test_healing_report_records_and_writes_json(self) -> None:
+        from aegisai.reporting import HealingReport
+
+        with TemporaryDirectory() as tmp:
+            report = HealingReport()
+            report.record_attempt(
+                original_locator="#old",
+                healed_locator="#new",
+                success=True,
+                source="deterministic",
+                layer_label="L2:deterministic",
+                confidence=0.93,
+            )
+            target = report.write_json(Path(tmp) / "report.json")
+            payload = target.read_text(encoding="utf-8")
+
+        self.assertIn('"success": 1', payload)
+        self.assertIn('"L2:deterministic": 1', payload)
+
+    def test_locator_cache_reuses_same_dom_fingerprint(self) -> None:
+        from aegisai.utils.config import AegisConfig, CacheConfig
+
+        with TemporaryDirectory() as tmp:
+            app = AegisAI(config=AegisConfig(cache=CacheConfig(path=str(Path(tmp) / "cache.json"))))
+            dom = '<input type="email">'
+            first = app.heal_locator("//input[@type='email']", dom)
+            second = app.heal_locator("//input[@type='email']", dom)
+
+        self.assertEqual(first.source, "deterministic")
+        self.assertEqual(second.source, "cache")
+        self.assertEqual(second.locator, 'input[type="email"]')
+
+    def test_dom_fingerprint_does_not_include_secret_values(self) -> None:
+        from aegisai.cache import dom_fingerprint
+
+        left = dom_fingerprint('<input name="password" value="secret-one">')
+        right = dom_fingerprint('<input name="password" value="secret-two">')
+
+        self.assertEqual(left, right)
+
+    def test_cache_path_can_be_shared_through_environment(self) -> None:
+        from unittest.mock import patch
+        from aegisai.cache import CACHE_PATH_ENV, LocatorCache
+
+        with TemporaryDirectory() as tmp:
+            shared_path = Path(tmp) / "team-cache.json"
+            with patch.dict("os.environ", {CACHE_PATH_ENV: str(shared_path)}):
+                cache = LocatorCache()
+
+        self.assertEqual(cache.path, shared_path)
+
+    def test_dom_drift_detection_reports_added_and_removed_locators(self) -> None:
+        from aegisai import detect_dom_drift
+
+        drift = detect_dom_drift('<button id="submit">Submit</button>', '<button id="login">Login</button>')
+
+        self.assertTrue(drift.changed)
+        self.assertEqual(drift.removed_locators, ["#submit"])
+        self.assertEqual(drift.added_locators, ["#login"])
+
+    def test_dry_run_locator_reports_without_interaction(self) -> None:
+        from aegisai.dry_run import audit_locator
+
+        result = audit_locator(
+            failing_locator="//input[@type='email']",
+            dom='<input type="email">',
+        )
+
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.suggested_locator, 'input[type="email"]')
+
+    def test_selenium_dry_run_uses_page_source_only(self) -> None:
+        from aegisai.selenium import dry_run_find
+
+        class _Driver:
+            page_source = '<button data-testid="login-button">Login</button>'
+
+            def find_element(self, by, locator):
+                raise AssertionError("dry_run_find must not call find_element")
+
+        result = dry_run_find(_Driver(), "xpath", "//button[@id='login']")
+        self.assertEqual(result.suggested_locator, '[data-testid="login-button"]')
+
+    def test_debug_artifacts_capture_redacted_dom(self) -> None:
+        from aegisai import capture_debug_artifacts
+
+        class _Driver:
+            page_source = '<input name="password" value="secret"><button data-testid="login">Login</button>'
+
+        with TemporaryDirectory() as tmp:
+            paths = capture_debug_artifacts(_Driver(), directory=tmp)
+            payload = Path(paths["dom"]).read_text(encoding="utf-8")
+
+        self.assertIn("login", payload)
+        self.assertNotIn("secret", payload)
+
+    def test_playwright_dry_run_uses_page_content_only(self) -> None:
+        from aegisai.playwright import dry_run_selector
+
+        class _Page:
+            def content(self):
+                return '<input type="email">'
+
+            def locator(self, selector):
+                raise AssertionError("dry_run_selector must not create Playwright locators")
+
+        result = dry_run_selector(_Page(), "xpath=//input[@type='email']")
+        self.assertEqual(result.suggested_locator, 'input[type="email"]')
+
+
+class PolicyAndPersistenceTests(unittest.TestCase):
+    def test_security_policy_loads_toml_file(self) -> None:
+        from aegisai.security import load_security_policy
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.toml"
+            path.write_text(
+                "[security]\n"
+                "name = \"strict\"\n"
+                "allow_runtime_for_high = false\n"
+                "min_confidence_medium = 0.91\n",
+                encoding="utf-8",
+            )
+            policy = load_security_policy(path)
+
+        self.assertEqual(policy.name, "strict")
+        self.assertFalse(policy.allow_runtime_for_high)
+        self.assertEqual(policy.min_confidence_medium, 0.91)
+
+    def test_security_policy_loads_simple_yaml_file(self) -> None:
+        from aegisai.security import load_security_policy
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.yaml"
+            path.write_text(
+                "security:\n"
+                "  name: yaml-policy\n"
+                "  auto_persist_low: false\n",
+                encoding="utf-8",
+            )
+            policy = load_security_policy(path)
+
+        self.assertEqual(policy.name, "yaml-policy")
+        self.assertFalse(policy.auto_persist_low)
+
+    def test_high_risk_runtime_can_be_blocked_by_policy(self) -> None:
+        from aegisai.security import SecurityPolicy
+
+        html = '<button data-testid="delete-user">Delete user</button>'
+        app = AegisAI(security_policy=SecurityPolicy(allow_runtime_for_high=False))
+        result = app.heal_locator("//button[@id='delete']", html, expected_role="button")
+
+        self.assertIsNone(result.locator)
+        self.assertEqual(result.guardrail.code, "security_blocked")
+
+    def test_security_audit_log_redacts_sensitive_values(self) -> None:
+        from aegisai.models import DomElement
+        from aegisai.security import SecurityOfficer, SecurityPolicy
+
+        with TemporaryDirectory() as tmp:
+            officer = SecurityOfficer(SecurityPolicy(audit_dir=tmp))
+            officer.review_candidate(
+                old_locator="//input[@name='password']",
+                new_locator='input[type="password"]',
+                element=DomElement(
+                    tag="input",
+                    attrs={"type": "password", "name": "password", "value": "ActualPassword123"},
+                ),
+                source="test",
+                confidence=0.91,
+            )
+            files = list(Path(tmp).glob("*.json"))
+            payload = files[0].read_text(encoding="utf-8")
+
+        self.assertIn("***MASKED***", payload)
+        self.assertNotIn("ActualPassword123", payload)
+
+    def test_heal_suggestions_file_contains_diff(self) -> None:
+        from aegisai.persistence.suggestions import append_heal_suggestion, create_source_suggestion
+
+        with TemporaryDirectory() as tmp:
+            script = Path(tmp) / "test_login.py"
+            script.write_text('driver.find_element(By.ID, "old-login")\n', encoding="utf-8")
+            suggestion = create_source_suggestion(
+                old_locator="old-login",
+                new_locator="new-login",
+                confidence=0.91,
+                source_label="L2:deterministic",
+                script_path=script,
+                reason="review required",
+            )
+            target = append_heal_suggestion(suggestion, Path(tmp) / "HEAL_SUGGESTIONS.json")
+            payload = target.read_text(encoding="utf-8")
+
+        self.assertIn("new-login", payload)
+        self.assertIn("--- a/test_login.py", payload)
+
+    def test_multi_occurrence_source_patch_requires_review(self) -> None:
+        source = 'page.locator("#old").click()\npage.locator("#old").fill("x")\n'
+        result = rewrite_static_locator(source, "#old", "#new")
+
+        self.assertFalse(result.changed)
+        self.assertIn("Multiple static occurrences", result.reason)
+
+
+class AsyncPlaywrightAndIntegrationTests(unittest.TestCase):
+    def test_async_playwright_heal_fill_helper(self) -> None:
+        import asyncio
+        from aegisai.playwright_async import async_heal_fill
+
+        class _Locator:
+            def __init__(self, page, selector):
+                self.page = page
+                self.selector = selector
+
+            async def fill(self, value, **kwargs):
+                if self.selector != "#password":
+                    raise RuntimeError("missing")
+                self.page.values[self.selector] = value
+
+        class _Page:
+            def __init__(self):
+                self.values = {}
+
+            def locator(self, selector, *args, **kwargs):
+                return _Locator(self, selector)
+
+            async def content(self):
+                return '<input id="password" type="password">'
+
+        async def _run() -> dict[str, str]:
+            page = _Page()
+            await async_heal_fill(page, "xpath=//input[@id='pass-field']", "secret")
+            return page.values
+
+        self.assertEqual(asyncio.run(_run())["#password"], "secret")
+
+    def test_universal_activate_uses_async_playwright_patch(self) -> None:
+        import asyncio
+        from aegisai import activate_aegis, deactivate_aegis
+
+        class _Locator:
+            async def fill(self, value, **kwargs):
+                return None
+
+        class _AsyncPage:
+            def locator(self, selector, *args, **kwargs):
+                return _Locator()
+
+            async def content(self):
+                return "<html></html>"
+
+        page = _AsyncPage()
+        patch = activate_aegis(page)
+        self.assertIs(getattr(page, "_aegisai_async_playwright_patch"), patch)
+        deactivate_aegis(page)
+        self.assertFalse(patch.active)
+        asyncio.run(page.content())
+
+    def test_pytest_plugin_module_imports(self) -> None:
+        import aegisai.pytest_plugin as plugin
+
+        self.assertTrue(callable(plugin.pytest_addoption))
+
+    def test_public_extra_modules_import(self) -> None:
+        import aegisai.playwright
+        import aegisai.playwright_async
+        import aegisai.selenium
+        import aegisai.unittest_integration
+
+        self.assertTrue(callable(aegisai.selenium.heal_find))
+        self.assertTrue(callable(aegisai.playwright.heal_fill))
+        self.assertTrue(callable(aegisai.playwright_async.async_heal_fill))
+
+    def test_unittest_mixin_restores_targets(self) -> None:
+        from aegisai.unittest_integration import AegisTestMixin
+
+        class _Driver:
+            page_source = "<html></html>"
+
+            def find_element(self, by="id", value=None):
+                raise RuntimeError("missing")
+
+            def execute_script(self, script):
+                return None
+
+        class _Case(AegisTestMixin):
+            def run_case(self):
+                self.driver = _Driver()
+                patch = self.activate_aegis_for(self.driver)
+                self.tearDown()
+                return patch
+
+        patch = _Case().run_case()
+        self.assertFalse(patch.active)
+
+
+class BrowserComplexityTests(unittest.TestCase):
+    def test_static_fixture_dropdown_and_table_patterns_heal(self) -> None:
+        html = Path("tests/fixtures/common_ui_patterns.html").read_text(encoding="utf-8")
+
+        dropdown = AegisAI().heal_locator("//select[@id='country-field']", html, expected_role="combobox")
+        table_cell = AegisAI().heal_locator("//td[@id='order-status-cell']", html)
+
+        self.assertEqual(dropdown.locator, "#country")
+        self.assertEqual(table_cell.locator, '[data-testid="order-status"]')
+
+    def test_hidden_and_disabled_candidates_are_blocked(self) -> None:
+        disabled = AegisAI().heal_locator(
+            "//button[@id='disabled-login']",
+            '<button data-testid="disabled-login" disabled>Login</button>',
+            expected_role="button",
+        )
+        hidden = AegisAI().heal_locator(
+            "//button[@id='hidden-login']",
+            '<button data-testid="hidden-login" aria-hidden="true">Login</button>',
+            expected_role="button",
+        )
+
+        self.assertIsNone(disabled.locator)
+        self.assertEqual(disabled.guardrail.code, "not_interactable")
+        self.assertIsNone(hidden.locator)
+        self.assertEqual(hidden.guardrail.code, "not_interactable")
+
+    def test_overlay_candidates_are_blocked(self) -> None:
+        result = AegisAI().heal_locator(
+            "//button[@id='login']",
+            '<button data-testid="login-button" class="blocking-overlay">Login</button>',
+            expected_role="button",
+        )
+
+        self.assertIsNone(result.locator)
+        self.assertEqual(result.guardrail.code, "not_interactable")
+
+    def test_stale_element_failure_is_treated_as_locator_recoverable(self) -> None:
+        from aegisai.interceptor.base_interceptor import BaseInterceptor
+
+        class StaleElementReferenceException(Exception):
+            pass
+
+        self.assertTrue(BaseInterceptor().is_locator_failure(StaleElementReferenceException("stale")))
+
+    def test_selenium_quick_find_discovers_iframe_element(self) -> None:
+        from aegisai.engine.healing_orchestrator import HealingOrchestrator
+
+        class _Element:
+            def is_displayed(self):
+                return True
+
+        class _SwitchTo:
+            def __init__(self, driver):
+                self.driver = driver
+
+            def frame(self, frame):
+                self.driver.in_frame = True
+
+            def parent_frame(self):
+                self.driver.in_frame = False
+
+        class _Driver:
+            def __init__(self):
+                self.in_frame = False
+                self.switch_to = _SwitchTo(self)
+
+            def find_element(self, by, locator):
+                if self.in_frame and locator == "#email":
+                    return _Element()
+                raise RuntimeError("missing")
+
+            def find_elements(self, by, locator):
+                return ["frame"] if not self.in_frame and locator == "iframe,frame" else []
+
+        driver = _Driver()
+        element = HealingOrchestrator()._quick_find(driver, "css", "#email")
+
+        self.assertIsNotNone(element)
+        self.assertTrue(driver.in_frame)
+
+    def test_l0_handles_delayed_render_without_clicking(self) -> None:
+        from aegisai.engine.healing_orchestrator import HealingOrchestrator
+
+        class _Element:
+            def is_displayed(self):
+                return True
+
+        class _Driver:
+            page_source = "<html></html>"
+
+            def __init__(self):
+                self.calls = 0
+                self.clicked = False
+
+            def find_element(self, by, locator):
+                self.calls += 1
+                if self.calls >= 2:
+                    return _Element()
+                raise RuntimeError("not rendered yet")
+
+            def execute_script(self, script):
+                return None
+
+        driver = _Driver()
+        element, _ = HealingOrchestrator()._l0_dom_ready(driver, "#late")
+
+        self.assertIsNotNone(element)
+        self.assertFalse(driver.clicked)
+
+    def test_l0_modal_closed_remains_safe_failure(self) -> None:
+        from aegisai.engine.healing_orchestrator import HealingOrchestrator
+
+        class _Driver:
+            page_source = "<button id='open-login'>Open Login</button>"
+
+            def __init__(self):
+                self.clicked = False
+
+            def find_element(self, by, locator):
+                raise RuntimeError("modal closed")
+
+            def execute_script(self, script):
+                if "click" in script.lower():
+                    self.clicked = True
+
+        driver = _Driver()
+        element, _ = HealingOrchestrator()._l0_dom_ready(driver, "#email")
+
+        self.assertIsNone(element)
+        self.assertFalse(driver.clicked)
+
+    def test_smart_wait_strategy_varies_by_element_type(self) -> None:
+        from aegisai.engine.healing_orchestrator import HealingOrchestrator
+
+        self.assertLess(
+            HealingOrchestrator._smart_wait_seconds("//button[@id='submit']"),
+            HealingOrchestrator._smart_wait_seconds("//div[@id='profile-modal']"),
+        )
+
+    def test_l4_js_probe_contains_shadow_dom_query(self) -> None:
+        from aegisai.engine.js_prober import _PROBE_SCRIPT, _build_strategies
+
+        self.assertIn("shadowRoot", _PROBE_SCRIPT)
+        self.assertIn("queryDeep", _PROBE_SCRIPT)
+        self.assertTrue(any(item["label"] == "original_css_deep" for item in _build_strategies("my-widget button")))
+
+    def test_sdk_healing_stays_under_local_performance_budget(self) -> None:
+        import time
+
+        started = time.perf_counter()
+        result = AegisAI().heal_locator("//input[@type='email']", '<input type="email">', use_cache=False)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+
+        self.assertEqual(result.locator, 'input[type="email"]')
+        self.assertLess(elapsed_ms, 250)
+
+    def test_long_run_repeated_healing_is_stable(self) -> None:
+        from aegisai.utils.config import AegisConfig, CacheConfig
+
+        with TemporaryDirectory() as tmp:
+            app = AegisAI(config=AegisConfig(cache=CacheConfig(path=str(Path(tmp) / "cache.json"))))
+            locators = [
+                app.heal_locator("//input[@type='email']", '<input type="email">').locator
+                for _ in range(25)
+            ]
+
+        self.assertEqual(set(locators), {'input[type="email"]'})
 
 
 if __name__ == "__main__":

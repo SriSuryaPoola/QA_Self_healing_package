@@ -1,0 +1,12 @@
+[security]
+name = "enterprise-balanced"
+allow_runtime_for_medium = true
+allow_runtime_for_high = false
+allow_llm_for_medium = true
+allow_llm_for_high = false
+auto_persist_low = true
+audit_enabled = true
+audit_dir = ".aegisai/audit"
+min_confidence_low = 0.80
+min_confidence_medium = 0.88
+min_confidence_high = 0.95

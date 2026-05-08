@@ -14,6 +14,7 @@ from types import MethodType
 from typing import Any, Callable
 
 from aegisai.interceptor.selenium_listener import AegisSeleniumListener
+from aegisai.dry_run import DryRunResult, audit_locator
 
 ConditionFactory = Callable[[tuple[Any, str]], Any]
 
@@ -84,6 +85,26 @@ def heal_send_keys(
     element = heal_find(driver, wait, by, locator, condition, **kwargs)
     element.send_keys(text)
     return element
+
+
+def dry_run_find(
+    driver: Any,
+    by: Any,
+    locator: str,
+    *,
+    expected_role: str | None = None,
+) -> DryRunResult:
+    """Analyze a Selenium locator without calling ``find_element`` or interacting."""
+
+    try:
+        dom = driver.page_source
+    except Exception:
+        dom = ""
+    return audit_locator(
+        failing_locator=str(locator),
+        dom=dom,
+        expected_role=expected_role or _expected_role_from_locator(str(by), str(locator)),
+    )
 
 
 @dataclass
@@ -190,3 +211,12 @@ def _by_label(by: Any) -> str:
     if isinstance(by, str):
         return by.upper()
     return str(by).upper()
+
+
+def _expected_role_from_locator(by: str, locator: str) -> str | None:
+    lowered = f"{by} {locator}".lower()
+    if any(token in lowered for token in ("button", "submit", "login")):
+        return "button"
+    if any(token in lowered for token in ("input", "email", "password", "user")):
+        return "textbox"
+    return None

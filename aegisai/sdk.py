@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import time
+
+from .cache import LocatorCache
 from .engine.deterministic import DeterministicEngine
 from .engine.llm import LLMAdapter, StrictJsonLLMEngine
 from .guardrails.validator import GuardrailValidator
@@ -13,6 +16,7 @@ from .models import (
     HealRequest,
     HealResult,
 )
+from .reporting import HealingReport, get_session_report
 from .security import SecurityOfficer, SecurityPolicy
 from .utils.config import AegisConfig
 from .utils.dom_parser import parse_dom_subset
@@ -33,6 +37,8 @@ class AegisAI:
         )
         self.guardrails = GuardrailValidator()
         self.security_officer = SecurityOfficer(security_policy)
+        self.report: HealingReport = get_session_report()
+        self.cache = LocatorCache(self.config.cache.path, disabled=not self.config.cache.enabled)
         self._llm_engine: StrictJsonLLMEngine | None = (
             StrictJsonLLMEngine(
                 adapter=llm_adapter,
@@ -50,6 +56,8 @@ class AegisAI:
         *,
         expected_role: str | None = None,
         historical_success: dict[str, float] | None = None,
+        cache_scope: str | None = None,
+        use_cache: bool | None = None,
     ) -> HealResult:
         """Attempt a deterministic, guarded heal for a failing locator.
 
@@ -57,13 +65,35 @@ class AegisAI:
         and its output must still match the filtered DOM and pass guardrails.
         """
 
+        started = time.perf_counter()
         elements = parse_dom_subset(dom)
+        scope = cache_scope or "default"
         request = HealRequest(
             failing_locator=failing_locator,
             elements=elements,
             expected_role=expected_role,
             historical_success=historical_success or {},
         )
+
+        if use_cache is not False:
+            cached = self.cache.get(original_locator=failing_locator, dom=dom, scope=scope)
+            if cached is not None:
+                cached_result = self._result_from_cache(
+                    request=request,
+                    locator=cached.healed_locator,
+                    source=cached.source,
+                    confidence=cached.confidence,
+                )
+                if cached_result.locator:
+                    self._record_result(
+                        failing_locator=failing_locator,
+                        result=cached_result,
+                        started=started,
+                        layer_label="cache",
+                        reason="Reused local healed-locator cache entry.",
+                    )
+                    return cached_result
+
         result = self.deterministic.heal(request)
         decision = self.guardrails.validate(request, result)
 
@@ -76,37 +106,80 @@ class AegisAI:
                 confidence=result.candidate.confidence,
             )
             if not security.runtime_allowed:
-                return HealResult(
+                blocked = HealResult(
                     candidate=None,
                     alternatives=result.alternatives,
                     source=result.source,
                     guardrail=GuardrailDecision(False, security.reason, "security_blocked"),
                     llm_used=False,
                 )
-            return HealResult(
+                self._record_result(
+                    failing_locator=failing_locator,
+                    result=blocked,
+                    started=started,
+                    layer_label="deterministic",
+                    reason=security.reason,
+                )
+                return blocked
+            healed = HealResult(
                 candidate=result.candidate,
                 alternatives=result.alternatives,
                 source=result.source,
                 guardrail=decision,
                 llm_used=False,
             )
+            if use_cache is not False:
+                self.cache.put(
+                    original_locator=failing_locator,
+                    healed_locator=result.candidate.locator,
+                    dom=dom,
+                    scope=scope,
+                    confidence=result.candidate.confidence,
+                    source=result.source,
+                )
+            self._record_result(
+                failing_locator=failing_locator,
+                result=healed,
+                started=started,
+                layer_label="deterministic",
+                risk_level=security.risk_level.value,
+                persistence_decision=security.policy_label,
+                reason=decision.reason,
+            )
+            return healed
 
         if self._llm_engine is not None:
-            return self._try_llm_fallback(
+            llm_result = self._try_llm_fallback(
                 failing_locator=failing_locator,
                 expected_role=expected_role,
                 elements=elements,
                 request=request,
                 deterministic_result=result,
             )
+            self._record_result(
+                failing_locator=failing_locator,
+                result=llm_result,
+                started=started,
+                layer_label="llm",
+                reason=llm_result.guardrail.reason if llm_result.guardrail else "",
+            )
+            return llm_result
 
-        return HealResult(
+        blocked = HealResult(
             candidate=None,
             alternatives=result.alternatives,
             source=result.source,
             guardrail=decision,
             llm_used=False,
         )
+        self._record_result(
+            failing_locator=failing_locator,
+            result=blocked,
+            started=started,
+            layer_label="deterministic",
+            reason=decision.reason,
+        )
+        return blocked
 
     def _try_llm_fallback(
         self,
@@ -216,6 +289,74 @@ class AegisAI:
             if stable and _normalize_selector(stable) == normalized_locator:
                 return element
         return None
+
+    def _result_from_cache(
+        self,
+        *,
+        request: HealRequest,
+        locator: str,
+        source: str,
+        confidence: float,
+    ) -> HealResult:
+        element = self._element_for_locator(locator, request.elements)
+        if element is None:
+            return HealResult(
+                candidate=None,
+                alternatives=[],
+                source="cache",
+                guardrail=GuardrailDecision(False, "Cached locator no longer matches the DOM fingerprint.", "cache_stale"),
+                llm_used=False,
+            )
+
+        from .engine.confidence import route_for_score
+
+        candidate = HealCandidate(
+            locator=locator,
+            confidence=confidence,
+            element=element,
+            reason="local_cache_hit",
+            confidence_breakdown=ConfidenceBreakdown(
+                attribute_match=1.0,
+                dom_proximity=1.0,
+                historical_success=1.0,
+                score=confidence,
+                route=route_for_score(confidence),
+            ),
+        )
+        result = HealResult(candidate=candidate, alternatives=[], source=source, llm_used=False)
+        decision = self.guardrails.validate(request, result)
+        if not decision.allowed:
+            return HealResult(candidate=None, alternatives=[], source="cache", guardrail=decision, llm_used=False)
+        return HealResult(candidate=candidate, alternatives=[], source="cache", guardrail=decision, llm_used=False)
+
+    def _record_result(
+        self,
+        *,
+        failing_locator: str,
+        result: HealResult,
+        started: float,
+        layer_label: str,
+        risk_level: str = "unknown",
+        persistence_decision: str = "not_applicable",
+        reason: str = "",
+    ) -> None:
+        if not self.config.report.enabled:
+            return
+        guardrail_reason = result.guardrail.reason if result.guardrail else reason
+        self.report.record_attempt(
+            original_locator=failing_locator,
+            healed_locator=result.locator,
+            success=bool(result.locator),
+            source=result.source,
+            layer_label=layer_label,
+            confidence=result.confidence,
+            risk_level=risk_level,
+            duration_ms=(time.perf_counter() - started) * 1000,
+            persistence_decision=persistence_decision,
+            reason=reason or guardrail_reason,
+            framework="sdk",
+            action="heal_locator",
+        )
 
 
 def _normalize_selector(locator: str) -> str:

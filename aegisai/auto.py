@@ -82,6 +82,10 @@ def activate_aegis(
         )
 
     if detection.kind == FrameworkKind.PLAYWRIGHT:
+        if _looks_like_async_playwright_page(detection.target):
+            from aegisai.playwright_async import activate_aegis_async
+
+            return activate_aegis_async(detection.target, app=app)
         from aegisai.playwright import activate_aegis as activate_playwright
 
         return activate_playwright(detection.target, app=app)
@@ -105,6 +109,11 @@ def deactivate_aegis(target: Any | None = None) -> None:
         return
 
     if detection.kind == FrameworkKind.PLAYWRIGHT:
+        if _looks_like_async_playwright_page(detection.target):
+            from aegisai.playwright_async import deactivate_aegis_async
+
+            deactivate_aegis_async(detection.target)
+            return
         from aegisai.playwright import deactivate_aegis as deactivate_playwright
 
         deactivate_playwright(detection.target)
@@ -238,6 +247,11 @@ def _looks_like_playwright_page(target: Any) -> bool:
     return callable(getattr(target, "locator", None)) and callable(getattr(target, "content", None))
 
 
+def _looks_like_async_playwright_page(target: Any) -> bool:
+    content = getattr(target, "content", None)
+    return callable(getattr(target, "locator", None)) and inspect.iscoroutinefunction(content)
+
+
 def _looks_like_selenium_driver(target: Any) -> bool:
     return callable(getattr(target, "find_element", None)) and (
         callable(getattr(target, "execute_script", None))
@@ -266,4 +280,3 @@ def _caller_script_path(caller_frame: Any | None) -> str | None:
     if not filename or filename.startswith("<"):
         return None
     return filename
-

@@ -30,7 +30,8 @@ class SecurityOfficer:
         confidence: float,
     ) -> SecurityDecision:
         risk = self.classify_risk(old_locator=old_locator, new_locator=new_locator, element=element)
-        runtime_allowed = self._runtime_allowed(risk)
+        threshold_reason = self._confidence_reason(risk, confidence)
+        runtime_allowed = self._runtime_allowed(risk) and threshold_reason is None
         llm_allowed = self._llm_allowed(risk)
         persistence_allowed = risk == RiskLevel.LOW and self.policy.auto_persist_low
         review_required = risk in {RiskLevel.MEDIUM, RiskLevel.HIGH} or (
@@ -42,7 +43,7 @@ class SecurityOfficer:
             persistence_allowed=persistence_allowed,
             review_required=review_required,
             risk_level=risk,
-            reason=self._reason(risk, runtime_allowed, persistence_allowed),
+            reason=threshold_reason or self._reason(risk, runtime_allowed, persistence_allowed),
             sanitized=True,
         )
         self.audit(
@@ -134,6 +135,20 @@ class SecurityOfficer:
         if risk == RiskLevel.MEDIUM:
             return self.policy.allow_llm_for_medium
         return True
+
+    def _confidence_reason(self, risk: RiskLevel, confidence: float) -> str | None:
+        minimum = {
+            RiskLevel.LOW: self.policy.min_confidence_low,
+            RiskLevel.MEDIUM: self.policy.min_confidence_medium,
+            RiskLevel.HIGH: self.policy.min_confidence_high,
+            RiskLevel.CRITICAL: 1.0,
+        }[risk]
+        if confidence < minimum:
+            return (
+                f"{risk.value} risk candidate confidence {confidence:.2f} is below "
+                f"the policy minimum {minimum:.2f}."
+            )
+        return None
 
     @staticmethod
     def _reason(risk: RiskLevel, runtime_allowed: bool, persistence_allowed: bool) -> str:

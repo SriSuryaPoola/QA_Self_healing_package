@@ -14,6 +14,8 @@ from typing import Any
 LOCATOR_FAILURE_NAMES = {
     "NoSuchElementException",
     "TimeoutException",
+    "StaleElementReferenceException",
+    "ElementClickInterceptedException",
     "Error",
 }
 

@@ -17,17 +17,24 @@ from types import MethodType
 from typing import Any, Callable
 
 from aegisai import AegisAI
+from aegisai.dry_run import DryRunResult, audit_locator
 from aegisai.engine.heuristic_searcher import search
 from aegisai.engine.locator_translator import translate
 from aegisai.interceptor.playwright_listener import AegisPlaywrightHooks
+from aegisai.reporting import get_session_report
 
 
 RETRYABLE_ACTIONS = {
     "check",
     "click",
+    "clear",
     "dblclick",
+    "dispatch_event",
+    "drag_to",
+    "evaluate",
     "fill",
     "focus",
+    "get_attribute",
     "hover",
     "inner_text",
     "input_value",
@@ -37,6 +44,8 @@ RETRYABLE_ACTIONS = {
     "scroll_into_view_if_needed",
     "select_option",
     "set_checked",
+    "screenshot",
+    "tap",
     "text_content",
     "type",
     "uncheck",
@@ -66,6 +75,7 @@ class AegisPlaywrightPatch:
     original_locator: Callable[..., Any]
     app: AegisAI = field(default_factory=AegisAI)
     hooks: AegisPlaywrightHooks = field(default_factory=AegisPlaywrightHooks)
+    report: Any = field(default_factory=get_session_report)
     active: bool = True
     _healing: bool = False
     last_outcome: PlaywrightHealOutcome | None = None
@@ -262,6 +272,17 @@ class AegisPlaywrightPatch:
     def _record(self, outcome: PlaywrightHealOutcome) -> None:
         self.last_outcome = outcome
         self.outcomes.append(outcome)
+        self.report.record_attempt(
+            original_locator=outcome.original_selector,
+            healed_locator=outcome.healed_selector,
+            success=outcome.success,
+            source=outcome.layer_label,
+            layer_label=outcome.layer_label,
+            confidence=outcome.confidence,
+            reason=outcome.reason,
+            framework="playwright",
+            action=outcome.action_name,
+        )
 
 
 class AegisPlaywrightLocator:
@@ -367,6 +388,38 @@ def heal_click(page: Any, selector: str, **kwargs: Any) -> Any:
     return patch.locator(selector).click(**kwargs)
 
 
+def dry_run_selector(page: Any, selector: str, *, expected_role: str | None = None) -> DryRunResult:
+    """Analyze a Playwright selector without creating a Locator or interacting."""
+
+    return audit_locator(
+        failing_locator=_selector_for_healing(selector),
+        dom=_safe_page_content(page),
+        expected_role=expected_role,
+    )
+
+
+def heal_frame_fill(page: Any, frame_selector: str, selector: str, value: str, **kwargs: Any) -> Any:
+    """Fill a selector inside a Playwright iframe using the same healing logic."""
+
+    frame = page.frame_locator(frame_selector)
+    try:
+        return frame.locator(selector).fill(value, **kwargs)
+    except Exception:
+        healed = heal_selector(_FrameContentAdapter(frame), selector)
+        return frame.locator(healed).fill(value, **kwargs)
+
+
+def heal_frame_click(page: Any, frame_selector: str, selector: str, **kwargs: Any) -> Any:
+    """Click a selector inside a Playwright iframe using the same healing logic."""
+
+    frame = page.frame_locator(frame_selector)
+    try:
+        return frame.locator(selector).click(**kwargs)
+    except Exception:
+        healed = heal_selector(_FrameContentAdapter(frame), selector)
+        return frame.locator(healed).click(**kwargs)
+
+
 def _selector_for_healing(selector: str) -> str:
     if selector.startswith("xpath="):
         return selector[len("xpath="):]
@@ -393,6 +446,19 @@ def _expected_role(action_name: str, selector: str) -> str | None:
     if action_name in {"click", "dblclick"} and any(token in lowered for token in ("button", "btn", "submit")):
         return "button"
     return None
+
+
+class _FrameContentAdapter:
+    def __init__(self, frame_locator: Any) -> None:
+        self.frame_locator = frame_locator
+
+    def content(self) -> str:
+        # Playwright FrameLocator has no direct content() API. This adapter keeps
+        # iframe helpers compatible with test doubles and frameworks that expose
+        # a custom content method on their frame wrapper.
+        if hasattr(self.frame_locator, "content"):
+            return self.frame_locator.content()
+        return ""
 
 
 class _Unhealed:

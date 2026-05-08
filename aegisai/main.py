@@ -7,7 +7,11 @@ import getpass
 import json
 from pathlib import Path
 
+from .cache import LocatorCache
+from .dry_run import audit_locator
+from .reporting import HealingReport, get_session_report, summarize_report
 from .sdk import AegisAI
+from .security import load_security_policy
 from .state import is_state_poisoned
 from .utils.llm_config import (
     DEFAULT_MODELS,
@@ -21,10 +25,13 @@ from .utils.llm_config import (
 
 def _heal(args: argparse.Namespace) -> int:
     dom = Path(args.dom_file).read_text(encoding="utf-8")
-    result = AegisAI().heal_locator(
+    policy = load_security_policy(args.policy_file) if args.policy_file else None
+    app = AegisAI(security_policy=policy)
+    result = app.heal_locator(
         args.locator,
         dom,
         expected_role=args.expected_role,
+        use_cache=not args.no_cache,
     )
     payload = {
         "locator": result.locator,
@@ -38,7 +45,56 @@ def _heal(args: argparse.Namespace) -> int:
         },
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
+    if args.report_file:
+        app.report.write_json(args.report_file)
     return 0 if result.locator else 1
+
+
+def _audit(args: argparse.Namespace) -> int:
+    dom = Path(args.dom_file).read_text(encoding="utf-8")
+    policy = load_security_policy(args.policy_file) if args.policy_file else None
+    result = audit_locator(
+        failing_locator=args.locator,
+        dom=dom,
+        expected_role=args.expected_role,
+        app=AegisAI(security_policy=policy),
+    )
+    payload = result.to_dict()
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    if args.approval_prompt and result.suggested_locator:
+        answer = input(f"Approve suggested locator {result.suggested_locator!r}? [y/N]: ").strip().lower()
+        print(json.dumps({"approved": answer in {"y", "yes"}}))
+    return 0 if result.suggested_locator else 1
+
+
+def _report(args: argparse.Namespace) -> int:
+    if args.input:
+        payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
+        print(json.dumps(summarize_report(payload), indent=2, sort_keys=True))
+        return 0
+    report = get_session_report()
+    if args.output:
+        report.write_json(args.output)
+    print(json.dumps(summarize_report(report), indent=2, sort_keys=True))
+    return 0
+
+
+def _cache(args: argparse.Namespace) -> int:
+    cache = LocatorCache(args.path or None)
+    if args.clear:
+        cache.clear()
+        print("AegisAI locator cache cleared.")
+        return 0
+    status = {
+        "path": str(cache.path),
+        "exists": cache.path.exists(),
+        "disabled": cache.disabled,
+    }
+    print(json.dumps(status, indent=2, sort_keys=True))
+    return 0
 
 
 def _state(_: argparse.Namespace) -> int:
@@ -135,7 +191,29 @@ def build_parser() -> argparse.ArgumentParser:
     heal.add_argument("--locator", required=True, help="Failing locator, for example '#login'.")
     heal.add_argument("--dom-file", required=True, help="Path to a local HTML fixture.")
     heal.add_argument("--expected-role", default=None, help="Expected semantic role, for example 'button'.")
+    heal.add_argument("--policy-file", default="", help="Optional JSON/TOML/YAML Security Officer policy.")
+    heal.add_argument("--no-cache", action="store_true", help="Disable local healed-locator cache for this run.")
+    heal.add_argument("--report-file", default="", help="Write JSON healing report to this path.")
     heal.set_defaults(func=_heal)
+
+    audit = subcommands.add_parser("audit", aliases=["dry-run"], help="Analyze a locator without browser actions.")
+    audit.add_argument("--locator", required=True, help="Failing locator, for example '#login'.")
+    audit.add_argument("--dom-file", required=True, help="Path to a local HTML fixture.")
+    audit.add_argument("--expected-role", default=None, help="Expected semantic role, for example 'button'.")
+    audit.add_argument("--policy-file", default="", help="Optional JSON/TOML/YAML Security Officer policy.")
+    audit.add_argument("--output", default="", help="Write dry-run JSON output to this path.")
+    audit.add_argument("--approval-prompt", action="store_true", help="Ask for local human approval after analysis.")
+    audit.set_defaults(func=_audit)
+
+    report = subcommands.add_parser("report", help="Summarize or write a JSON healing report.")
+    report.add_argument("--input", default="", help="Read an existing report JSON file.")
+    report.add_argument("--output", default="", help="Write the current process report JSON.")
+    report.set_defaults(func=_report)
+
+    cache = subcommands.add_parser("cache", help="Inspect or clear the local locator cache.")
+    cache.add_argument("--path", default="", help="Override cache file path.")
+    cache.add_argument("--clear", action="store_true", help="Clear the cache file.")
+    cache.set_defaults(func=_cache)
 
     state = subcommands.add_parser("state", help="Print current state-poisoning flag.")
     state.set_defaults(func=_state)

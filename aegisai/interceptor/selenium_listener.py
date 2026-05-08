@@ -52,6 +52,9 @@ class AegisSeleniumListener(BaseInterceptor):
         self._security_policy = security_policy
         self._orchestrator: Any = None
         self.last_outcome: Any = None
+        from aegisai.reporting import get_session_report
+
+        self.report = get_session_report()
 
     def before_find(self, by: str, value: str, driver: Any | None = None) -> None:
         self.record_action("find", locator=f"{by}={value}", driver=bool(driver))
@@ -87,13 +90,28 @@ class AegisSeleniumListener(BaseInterceptor):
             original_condition=original_condition,
         )
         self.last_outcome = outcome
+        self.report.record_attempt(
+            original_locator=failing_locator,
+            healed_locator=outcome.healed_locator,
+            success=outcome.success,
+            source=outcome.layer_label,
+            layer_label=outcome.layer_label,
+            confidence=outcome.confidence,
+            duration_ms=outcome.total_ms,
+            persistence_decision="patched" if outcome.script_patched else "not_patched",
+            reason=outcome.reason,
+            framework="selenium",
+            action="autonomous_heal",
+            metadata={"layers_tried": outcome.layers_tried, "layer_timings": outcome.layer_timings},
+        )
 
         if outcome.success:
             logger.info(
-                "[aegisai] Healed at %s -> %s | layers tried: %s | patched: %s",
+                "[aegisai] Heal succeeded at %s -> %s | confidence: %.2f | %.1f ms | patched: %s",
                 outcome.layer_label,
                 outcome.healed_locator,
-                " -> ".join(outcome.layers_tried),
+                outcome.confidence,
+                outcome.total_ms,
                 outcome.script_patched,
             )
             return outcome.element

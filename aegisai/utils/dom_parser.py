@@ -22,6 +22,12 @@ ALLOWED_ATTRIBUTES = {
     "type",
     "placeholder",
     "autocomplete",
+    "class",
+    "disabled",
+    "hidden",
+    "aria-hidden",
+    "href",
+    "style",
 }
 
 VOID_ELEMENTS = {
@@ -109,6 +115,8 @@ def _implicit_role(tag: str, attrs: dict[str, str]) -> str | None:
         return "button"
     if tag == "a" and attrs.get("href"):
         return "link"
+    if tag == "select":
+        return "combobox"
     if tag == "input":
         input_type = attrs.get("type", "text")
         if input_type in {"submit", "button"}:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aegisai"
-version = "0.3.5"
+version = "0.3.6"
 description = "Deterministic-first self-healing test automation SDK for Selenium and Playwright."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,20 +16,47 @@ classifiers = [
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Software Development :: Testing"
 ]
 dependencies = []
 
 [project.optional-dependencies]
-selenium = ["selenium>=4"]
-playwright = ["playwright>=1.40"]
-llm = ["openai>=1.0", "anthropic>=0.25"]
-persistence = ["libcst>=1.0"]
-dev = ["pytest>=8", "selenium>=4", "playwright>=1.40"]
+selenium = ["selenium>=4,<5"]
+playwright = ["playwright>=1.40,<2"]
+llm = ["openai>=1.0,<3", "anthropic>=0.25,<1"]
+persistence = ["libcst>=1.0,<2"]
+dev = ["pytest>=8,<10", "selenium>=4,<5", "playwright>=1.40,<2"]
 
 [project.scripts]
 aegisai = "aegisai.main:main"
 
+[project.entry-points.pytest11]
+aegisai = "aegisai.pytest_plugin"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["aegisai*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+strict_optional = true

@@ -28,6 +28,8 @@ class DomElement:
             return f'[name="{self.attrs["name"]}"]'
         if "aria-label" in self.attrs:
             return f'[aria-label="{self.attrs["aria-label"]}"]'
+        if "href" in self.attrs and self.tag == "a":
+            return f'a[href="{self.attrs["href"]}"]'
         # Fallback: use tag + type attribute so bare <input type="email"> elements
         # are never skipped entirely in the healing loop
         if self.tag == "input" and "type" in self.attrs:

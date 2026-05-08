@@ -14,6 +14,8 @@ class GuardrailValidator:
             return GuardrailDecision(False, "No DOM elements were available to heal.", "element_missing")
         if result.candidate is None:
             return GuardrailDecision(False, "No viable locator candidate was found.", "no_candidate")
+        if self._is_hidden_or_disabled(result):
+            return GuardrailDecision(False, "Candidate is hidden, aria-hidden, or disabled.", "not_interactable")
         if result.candidate.confidence < CONFIRM_THRESHOLD:
             return GuardrailDecision(False, "Candidate confidence is below safe threshold.", "low_confidence")
         if request.expected_role:
@@ -33,3 +35,15 @@ class GuardrailValidator:
             return False
         second = result.alternatives[0]
         return abs(result.candidate.confidence - second.confidence) <= self.ambiguity_delta
+
+    def _is_hidden_or_disabled(self, result: HealResult) -> bool:
+        if not result.candidate:
+            return False
+        attrs = result.candidate.element.attrs
+        return (
+            "disabled" in attrs
+            or "hidden" in attrs
+            or attrs.get("aria-hidden", "").lower() == "true"
+            or "pointer-events: none" in attrs.get("style", "").lower()
+            or "overlay" in attrs.get("class", "").lower()
+        )
