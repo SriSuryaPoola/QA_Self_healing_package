@@ -396,7 +396,7 @@ class RegressionTests(unittest.TestCase):
                         "--provider",
                         "openai",
                         "--api-key",
-                        "sk-test-secret",
+                        "unit-test-secret-value",
                         "--model",
                         "gpt-4o-mini",
                         "--config-file",
@@ -407,9 +407,9 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue(config_file.exists())
             self.assertIn('AEGIS_LLM_ENABLED="true"', config_file.read_text(encoding="utf-8"))
-            self.assertIn('AEGIS_LLM_API_KEY="sk-test-secret"', config_file.read_text(encoding="utf-8"))
+            self.assertIn('AEGIS_LLM_API_KEY="unit-test-secret-value"', config_file.read_text(encoding="utf-8"))
             self.assertIn("API key: configured", output.getvalue())
-            self.assertNotIn("sk-test-secret", output.getvalue())
+            self.assertNotIn("unit-test-secret-value", output.getvalue())
 
     def test_universal_adapter_reads_saved_user_config(self) -> None:
         from aegisai.engine.universal_llm_adapter import UniversalLLMAdapter
@@ -421,7 +421,7 @@ class RegressionTests(unittest.TestCase):
                 LLMSettings(
                     enabled=True,
                     provider="openai",
-                    api_key="sk-test-secret",
+                    api_key="unit-test-secret-value",
                     model="gpt-4o-mini",
                 ),
                 Path(tmp) / ".env",
@@ -430,7 +430,7 @@ class RegressionTests(unittest.TestCase):
                 self.assertTrue(UniversalLLMAdapter.is_configured())
                 adapter = UniversalLLMAdapter()
                 self.assertEqual(adapter.provider, "openai")
-                self.assertEqual(adapter.api_key, "sk-test-secret")
+                self.assertEqual(adapter.api_key, "unit-test-secret-value")
                 self.assertEqual(adapter.model, "gpt-4o-mini")
 
     def test_listener_uses_saved_llm_enabled_preference(self) -> None:

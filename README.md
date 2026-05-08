@@ -196,6 +196,12 @@ Until AegisAI is published to PyPI, install it from the GitHub repository after 
 pip install "aegisai[selenium,playwright] @ git+https://github.com/SriSuryaPoola/QA_Self_healing_package.git"
 ```
 
+If you want optional L5 provider libraries too:
+
+```powershell
+pip install "aegisai[selenium,playwright,llm] @ git+https://github.com/SriSuryaPoola/QA_Self_healing_package.git"
+```
+
 Or clone the repository and install from the project root:
 
 ```powershell
@@ -214,7 +220,7 @@ pip install ".[playwright]"
 For package development, use editable mode:
 
 ```powershell
-pip install -e ".[selenium,playwright]"
+pip install -e ".[dev,llm]"
 ```
 
 After AegisAI is published to PyPI, installation becomes:
@@ -223,9 +229,35 @@ After AegisAI is published to PyPI, installation becomes:
 pip install "aegisai[selenium,playwright]"
 ```
 
+For Playwright, install browser binaries after installing the Python dependency:
+
+```powershell
+python -m playwright install chromium
+```
+
 ## Optional LLM Configuration
 
 AegisAI does not ask for secrets during installation. That is intentional. Install-time prompts break CI/CD and are risky for enterprise environments.
+
+If you plan to use L5 with hosted LLM providers, install the optional LLM dependencies.
+
+From a cloned repository:
+
+```powershell
+pip install ".[llm]"
+```
+
+From GitHub:
+
+```powershell
+pip install "aegisai[llm] @ git+https://github.com/SriSuryaPoola/QA_Self_healing_package.git"
+```
+
+After PyPI publication:
+
+```powershell
+pip install "aegisai[llm]"
+```
 
 Configure L5 explicitly after installation:
 
