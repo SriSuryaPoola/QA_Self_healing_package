@@ -32,6 +32,10 @@ AegisAI_TDD*
 .aegisai/
 .aegisai-test-memory/
 logs/
+public repos/repos/*
+public repos/results/*
+!public repos/repos/.gitkeep
+!public repos/results/.gitkeep
 *.bak
 *.backup
 *.orig

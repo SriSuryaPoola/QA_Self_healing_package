@@ -122,6 +122,20 @@ class StateTests(unittest.TestCase):
         self.assertTrue(is_state_poisoned())
 
 
+class InterceptorTests(unittest.TestCase):
+    def test_base_interceptor_keeps_recent_failure_context(self) -> None:
+        from aegisai.interceptor.base_interceptor import BaseInterceptor
+
+        interceptor = BaseInterceptor()
+        interceptor.record_action("find", locator="#missing")
+
+        failure = interceptor.capture_failure(RuntimeError("locator not found"), locator="#missing")
+
+        self.assertIs(interceptor.last_failure, failure)
+        self.assertEqual(interceptor.failures[-1].locator, "#missing")
+        self.assertEqual(interceptor.failures[-1].last_actions[-1]["locator"], "#missing")
+
+
 class RegressionTests(unittest.TestCase):
     """Regression tests for bugs fixed in v0.2.0."""
 

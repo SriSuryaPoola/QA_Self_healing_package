@@ -478,6 +478,39 @@ Check LLM config without exposing secrets:
 python -m aegisai configure llm --status
 ```
 
+## Real-World Reliability Checks
+
+AegisAI includes an opt-in public-repo reliability suite under `tests/reliability`. These tests launch real browsers and validate the package against public QA/demo applications, so they are skipped during normal `pytest` runs unless explicitly enabled.
+
+Clone the public app replicas:
+
+```powershell
+& ".\public repos\scripts\clone_public_repos.ps1"
+```
+
+Run the real-world suite:
+
+```powershell
+$env:AEGISAI_RUN_PUBLIC_REPO_TESTS="1"
+$env:AEGISAI_HEADLESS="1"
+python -m pytest tests/reliability -q -s
+```
+
+Current public targets:
+
+| Public repo | Runtime target | Coverage |
+|---|---|---|
+| `saucelabs/the-internet` | `https://the-internet.herokuapp.com` | Selenium login healing, iframe shortcoming, Shadow DOM shortcoming, Playwright manual SDK |
+| `saucelabs/sample-app-web` | local replica only for now | Future modern app coverage |
+
+Latest verified public-suite result:
+
+```text
+5 passed
+```
+
+See `public repos/REAL_WORLD_FINDINGS.md` for the current capability and shortcoming report.
+
 ## Design Principles
 
 - Deterministic before AI.
