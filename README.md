@@ -190,28 +190,37 @@ L0-L4 exhausted. L5 LLM fallback was not started because AEGIS_LLM_API_KEY is no
 
 ## Installation
 
-For local wheel testing:
+Until AegisAI is published to PyPI, install it from the GitHub repository after it is pushed:
 
 ```powershell
-pip install "D:\Sample self healing\QA Package documents\dist\aegisai-0.3.4-py3-none-any.whl"
+pip install "aegisai[selenium,playwright] @ git+https://github.com/SriSuryaPoola/QA_Self_healing_package.git"
 ```
 
-For Selenium support:
+Or clone the repository and install from the project root:
 
 ```powershell
-pip install "aegisai[selenium]"
+git clone https://github.com/SriSuryaPoola/QA_Self_healing_package.git
+cd QA_Self_healing_package
+pip install ".[selenium,playwright]"
 ```
 
-For Playwright support:
+If you only need one browser framework:
 
 ```powershell
-pip install "aegisai[playwright]"
+pip install ".[selenium]"
+pip install ".[playwright]"
 ```
 
-If installing from this local source folder:
+For package development, use editable mode:
 
 ```powershell
-pip install -e .
+pip install -e ".[selenium,playwright]"
+```
+
+After AegisAI is published to PyPI, installation becomes:
+
+```powershell
+pip install "aegisai[selenium,playwright]"
 ```
 
 ## Optional LLM Configuration
