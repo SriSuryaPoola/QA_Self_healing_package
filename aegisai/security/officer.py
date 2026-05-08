@@ -7,7 +7,6 @@ and persistence are allowed.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from aegisai.models import DomElement
@@ -20,7 +19,7 @@ from .redactor import redact_dom_element, redact_payload
 class SecurityOfficer:
     def __init__(self, policy: SecurityPolicy | None = None) -> None:
         self.policy = policy or SecurityPolicy()
-        self._audit_keys: set[str] = set()
+        self._audit_keys: set[tuple[Any, ...]] = set()
 
     def review_candidate(
         self,
@@ -132,7 +131,26 @@ class SecurityOfficer:
     def _remember_audit_event(self, event: dict[str, Any]) -> bool:
         if not self.policy.audit_deduplicate:
             return True
-        key = json.dumps(event, sort_keys=True, default=str)
+        element = event.get("element") or {}
+        attrs = element.get("attrs") or {}
+        key = (
+            event.get("event"),
+            event.get("old_locator"),
+            event.get("new_locator"),
+            event.get("source"),
+            event.get("confidence"),
+            event.get("risk_level"),
+            event.get("runtime_allowed"),
+            event.get("llm_allowed"),
+            event.get("persistence_allowed"),
+            event.get("review_required"),
+            event.get("reason"),
+            element.get("tag"),
+            tuple(sorted(attrs.items())),
+            element.get("text"),
+            element.get("role"),
+            element.get("locator"),
+        )
         if key in self._audit_keys:
             return False
         self._audit_keys.add(key)
