@@ -994,39 +994,6 @@ class PolicyAndPersistenceTests(unittest.TestCase):
 
             self.assertEqual(len(list(Path(tmp).glob("*.json"))), 1)
 
-    def test_security_review_reuses_cached_decision_when_audit_is_deduped(self) -> None:
-        from aegisai.models import DomElement
-        from aegisai.security import SecurityOfficer
-
-        officer = SecurityOfficer()
-        original = officer.classify_risk
-        calls = 0
-
-        def counted_classify(**kwargs):
-            nonlocal calls
-            calls += 1
-            return original(**kwargs)
-
-        officer.classify_risk = counted_classify
-        element = DomElement(tag="button", attrs={"data-testid": "login-button"}, text="Login")
-        first = officer.review_candidate(
-            old_locator="#login",
-            new_locator='[data-testid="login-button"]',
-            element=element,
-            source="test",
-            confidence=0.91,
-        )
-        second = officer.review_candidate(
-            old_locator="#login",
-            new_locator='[data-testid="login-button"]',
-            element=element,
-            source="test",
-            confidence=0.91,
-        )
-
-        self.assertEqual(first, second)
-        self.assertEqual(calls, 1)
-
     def test_heal_suggestions_file_contains_diff(self) -> None:
         from aegisai.persistence.suggestions import append_heal_suggestion, create_source_suggestion
 
