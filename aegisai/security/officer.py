@@ -46,22 +46,23 @@ class SecurityOfficer:
             reason=threshold_reason or self._reason(risk, runtime_allowed, persistence_allowed),
             sanitized=True,
         )
-        self.audit(
-            {
-                "event": "candidate_review",
-                "old_locator": old_locator,
-                "new_locator": new_locator,
-                "source": source,
-                "confidence": confidence,
-                "element": redact_dom_element(element),
-                "risk_level": risk.value,
-                "runtime_allowed": runtime_allowed,
-                "llm_allowed": llm_allowed,
-                "persistence_allowed": persistence_allowed,
-                "review_required": review_required,
-                "reason": decision.reason,
-            }
-        )
+        if self._should_audit(decision):
+            self.audit(
+                {
+                    "event": "candidate_review",
+                    "old_locator": old_locator,
+                    "new_locator": new_locator,
+                    "source": source,
+                    "confidence": confidence,
+                    "element": redact_dom_element(element),
+                    "risk_level": risk.value,
+                    "runtime_allowed": runtime_allowed,
+                    "llm_allowed": llm_allowed,
+                    "persistence_allowed": persistence_allowed,
+                    "review_required": review_required,
+                    "reason": decision.reason,
+                }
+            )
         return decision
 
     def build_llm_payload(
@@ -117,6 +118,15 @@ class SecurityOfficer:
         except Exception:
             # Audit must never break test execution.
             return
+
+    def _should_audit(self, decision: SecurityDecision) -> bool:
+        if not self.policy.audit_enabled:
+            return False
+        if decision.risk_level != RiskLevel.LOW:
+            return True
+        if not decision.runtime_allowed or not decision.persistence_allowed:
+            return True
+        return self.policy.audit_low_risk
 
     def _runtime_allowed(self, risk: RiskLevel) -> bool:
         if risk == RiskLevel.CRITICAL:

@@ -26,6 +26,7 @@ class SecurityPolicy:
     allow_llm_for_high: bool = False
     auto_persist_low: bool = True
     audit_enabled: bool = True
+    audit_low_risk: bool = False
     audit_dir: str = ".aegisai/audit"
     min_confidence_low: float = 0.80
     min_confidence_medium: float = 0.80

@@ -939,6 +939,32 @@ class PolicyAndPersistenceTests(unittest.TestCase):
         self.assertIn("***MASKED***", payload)
         self.assertNotIn("ActualPassword123", payload)
 
+    def test_low_risk_success_audit_is_opt_in(self) -> None:
+        from aegisai.models import DomElement
+        from aegisai.security import SecurityOfficer, SecurityPolicy
+
+        with TemporaryDirectory() as tmp:
+            officer = SecurityOfficer(SecurityPolicy(audit_dir=tmp))
+            officer.review_candidate(
+                old_locator="#login",
+                new_locator='[data-testid="login-button"]',
+                element=DomElement(tag="button", attrs={"data-testid": "login-button"}, text="Login"),
+                source="test",
+                confidence=0.91,
+            )
+            self.assertEqual(list(Path(tmp).glob("*.json")), [])
+
+            opt_in = SecurityOfficer(SecurityPolicy(audit_dir=tmp, audit_low_risk=True))
+            opt_in.review_candidate(
+                old_locator="#login",
+                new_locator='[data-testid="login-button"]',
+                element=DomElement(tag="button", attrs={"data-testid": "login-button"}, text="Login"),
+                source="test",
+                confidence=0.91,
+            )
+
+            self.assertEqual(len(list(Path(tmp).glob("*.json"))), 1)
+
     def test_heal_suggestions_file_contains_diff(self) -> None:
         from aegisai.persistence.suggestions import append_heal_suggestion, create_source_suggestion
 
